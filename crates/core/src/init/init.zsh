@@ -34,12 +34,15 @@ _capsule_init() {
     typeset -gA _CAPSULE_CHAR_MAP
     typeset -g  _CAPSULE_CHAR_DEFAULT=""
     typeset -g  _CAPSULE_CHAR_CURRENT=""
+    typeset -g  _CAPSULE_RIGHT1=""
+    typeset -g  _CAPSULE_RIGHT2=""
 
     # Fallback prompt
     typeset -g _CAPSULE_FALLBACK='%F{green}%n%f@%m %F{green}%~%f %# '
 
     # Set initial prompt (ensures PROMPT is non-empty even if coproc fails)
     PROMPT=$_CAPSULE_FALLBACK
+    RPROMPT=""
 
     # Try to start coproc
     _capsule_start_coproc 2>/dev/null
@@ -175,6 +178,7 @@ _capsule_precmd() {
     if [[ -z "$_CAPSULE_COPROC_PID" ]] || ! command kill -0 "$_CAPSULE_COPROC_PID" 2>/dev/null; then
         _capsule_start_coproc 2>/dev/null || {
             PROMPT=$_CAPSULE_FALLBACK
+            RPROMPT=""
             return
         }
     fi
@@ -193,6 +197,7 @@ _capsule_precmd() {
     # Guard: refuse to write to fd 0 (stdin) if fds are uninitialized.
     (( _CAPSULE_FD_IN > 0 )) || {
         PROMPT=$_CAPSULE_FALLBACK
+        RPROMPT=""
         return
     }
 
@@ -206,6 +211,7 @@ _capsule_precmd() {
         "${_CAPSULE_GENERATION}"$'\t'"${_CAPSULE_LAST_EXIT}"$'\t'"${_CAPSULE_DURATION_MS:-}"$'\t'"${_cwd_escaped}"$'\t'"${COLUMNS}"$'\t'"${_keymap_escaped}"$'\t'"${_meta_escaped}"$'\n' 2>/dev/null; then
         _capsule_cleanup_fds
         PROMPT=$_CAPSULE_FALLBACK
+        RPROMPT=""
         return
     fi
 
@@ -241,6 +247,7 @@ _capsule_precmd() {
         _capsule_apply_prompt "$_left1" "$_left2"
     else
         PROMPT=$_CAPSULE_FALLBACK
+        RPROMPT=""
     fi
 
     # Re-enable async handler for Update messages
@@ -259,6 +266,7 @@ _capsule_async_callback() {
     local fd=$1
     local line
     local _old_prompt=$PROMPT
+    local _old_rprompt=$RPROMPT
     local -i _updated_prompt=0
 
     # Avoid recursive zle -F callbacks while reset-prompt redraws the line.
@@ -287,7 +295,7 @@ _capsule_async_callback() {
                 _capsule_unescape_field _left1 "$_left1"
                 _capsule_unescape_field _left2 "$_left2"
                 _capsule_apply_prompt "$_left1" "$_left2"
-                [[ "$PROMPT" != "$_old_prompt" ]] && _updated_prompt=1
+                [[ "$PROMPT" != "$_old_prompt" || "$RPROMPT" != "$_old_rprompt" ]] && _updated_prompt=1
             fi
         fi
         (( _updated_prompt )) && zle reset-prompt 2>/dev/null
@@ -296,6 +304,7 @@ _capsule_async_callback() {
         # Coproc died — clean up and use fallback
         _capsule_cleanup_fds
         PROMPT=$_CAPSULE_FALLBACK
+        RPROMPT=""
         zle reset-prompt 2>/dev/null
     fi
 }
@@ -303,6 +312,9 @@ _capsule_async_callback() {
 _capsule_parse_char_meta() {
     _CAPSULE_CHAR_MAP=()
     _CAPSULE_CHAR_DEFAULT=""
+    _CAPSULE_CHAR_CURRENT=""
+    _CAPSULE_RIGHT1=""
+    _CAPSULE_RIGHT2=""
     [[ -z "$1" ]] && return
     local _entry _key _val
     local IFS=$'\x1f'
@@ -311,6 +323,8 @@ _capsule_parse_char_meta() {
         _val=${_entry#*$'\x1e'}
         _CAPSULE_CHAR_MAP[$_key]=$_val
     done
+    _CAPSULE_RIGHT1=${_CAPSULE_CHAR_MAP[right1]:-}
+    _CAPSULE_RIGHT2=${_CAPSULE_CHAR_MAP[right2]:-}
     _CAPSULE_CHAR_DEFAULT=${_CAPSULE_CHAR_MAP[viins]:-${_CAPSULE_CHAR_MAP[main]:-}}
     _CAPSULE_CHAR_CURRENT=$_CAPSULE_CHAR_DEFAULT
 }
@@ -318,8 +332,10 @@ _capsule_parse_char_meta() {
 _capsule_apply_prompt() {
     if [[ -z "$2" ]]; then
         PROMPT="%F{green}%n%f@%m ${1} "
+        RPROMPT=$_CAPSULE_RIGHT1
     else
         PROMPT="%F{green}%n%f@%m ${1}"$'\n'"${2} "
+        RPROMPT=$_CAPSULE_RIGHT2
     fi
     if [[ -n "$_CAPSULE_CHAR_DEFAULT" && "${KEYMAP:-main}" == "vicmd" ]]; then
         local _target=${_CAPSULE_CHAR_MAP[vicmd]:-$_CAPSULE_CHAR_DEFAULT}

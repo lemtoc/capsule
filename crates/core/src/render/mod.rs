@@ -20,10 +20,14 @@ pub struct PromptLines {
     pub left1: String,
     /// Input line (line 2 of the prompt).
     pub left2: String,
-    /// Vim-mode character metadata for shell-side keymap switching.
+    /// Right prompt for line 1.
+    pub right1: String,
+    /// Right prompt for line 2.
+    pub right2: String,
+    /// Prompt metadata for shell-side features.
     ///
-    /// Format: `viins\x1estyled\x1fvicmd\x1estyled[\x1fmode\x1estyled]*`
-    /// Empty when no keymap modes are configured.
+    /// Format: `key\x1evalue[\x1fkey\x1evalue]*`.
+    /// Empty when no shell-side metadata is needed.
     pub char_meta: String,
 }
 
@@ -43,8 +47,20 @@ pub(crate) fn compose_segments(
     PromptLines {
         left1: compose_line(line1, cols, color_map),
         left2: compose_line(line2, cols, color_map),
+        right1: String::new(),
+        right2: String::new(),
         char_meta: String::new(),
     }
+}
+
+/// Compose a single prompt line from rendered segments.
+#[must_use]
+pub(crate) fn compose_segment_line(
+    segments: &[Segment],
+    cols: usize,
+    color_map: ColorMap,
+) -> String {
+    compose_line(segments, cols, color_map)
 }
 
 fn render_segments(segments: &[Segment], color_map: ColorMap) -> Vec<String> {

@@ -142,6 +142,24 @@ format = "HH:MM"
 }
 
 #[test]
+fn time_placement_deserializes() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[time]
+slot = "line2"
+side = "right"
+"#,
+    )?;
+    let config = load_config(&path);
+    assert_eq!(config.time.slot, ModuleSlot::Line2);
+    assert_eq!(config.time.side, PromptSide::Right);
+    Ok(())
+}
+
+#[test]
 fn time_format_invalid_returns_defaults() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("config.toml");

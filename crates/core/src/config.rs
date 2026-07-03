@@ -424,6 +424,10 @@ pub struct TimeConfig {
     pub format: TimeFormat,
     /// Connector word before the time segment (e.g., `"at"`).
     pub connector: String,
+    /// Prompt line placement.
+    pub slot: ModuleSlot,
+    /// Prompt side placement.
+    pub side: PromptSide,
     /// Style for the time segment.
     pub style: StyleConfig,
 }
@@ -434,6 +438,8 @@ impl Default for TimeConfig {
             disabled: true,
             format: TimeFormat::WithSeconds,
             connector: "at".to_owned(),
+            slot: ModuleSlot::Line2,
+            side: PromptSide::Left,
             style: StyleConfig::fg_bold(Color::Yellow),
         }
     }
@@ -568,7 +574,7 @@ impl<'de> serde::Deserialize<'de> for RegexPattern {
     }
 }
 
-/// Prompt line placement for a custom module.
+/// Prompt line placement for prompt modules.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ModuleSlot {
@@ -577,6 +583,17 @@ pub enum ModuleSlot {
     Line1,
     /// Line 2: before time.
     Line2,
+}
+
+/// Prompt side placement for modules that can be right-aligned.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PromptSide {
+    /// Left side of the prompt.
+    #[default]
+    Left,
+    /// Right side of the current prompt line.
+    Right,
 }
 
 /// User-defined prompt module entry from `[[module]]` in config.

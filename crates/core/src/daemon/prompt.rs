@@ -1,11 +1,11 @@
 use crate::{
-    config::{Config, ModuleSlot, PromptLayout},
+    config::{Config, ModuleSlot, PromptLayout, PromptSide},
     module::{
         CmdDurationModule, CustomModuleInfo, DirectoryModule, Module, RenderContext, StatusModule,
         TimeModule,
     },
     render::{
-        PromptLines, compose_segments, display_width,
+        PromptLines, compose_segment_line, compose_segments, display_width,
         segment::Segment,
         style::{Color, ColorMap, Style},
         truncate,
@@ -131,6 +131,8 @@ fn compose_two_line_prompt(
     }
 
     let mut line2 = Vec::with_capacity(2);
+    let mut right1 = Vec::with_capacity(1);
+    let mut right2 = Vec::with_capacity(1);
 
     append_custom_modules(
         &mut line2,
@@ -141,7 +143,13 @@ fn compose_two_line_prompt(
     );
 
     if let Some(time) = &fast.time {
-        line2.push(config.time.to_segment(time, connector_style));
+        let segment = config.time.to_segment(time, connector_style);
+        match (config.time.slot, config.time.side) {
+            (ModuleSlot::Line1, PromptSide::Left) => line1.push(segment),
+            (ModuleSlot::Line1, PromptSide::Right) => right1.push(segment),
+            (ModuleSlot::Line2, PromptSide::Left) => line2.push(segment),
+            (ModuleSlot::Line2, PromptSide::Right) => right2.push(segment),
+        }
     }
 
     if let Some(status) = &fast.status {
@@ -154,9 +162,13 @@ fn compose_two_line_prompt(
     }
 
     let mut result = compose_segments(&line1, &line2, cols, config.color_map);
+    result.right1 = compose_segment_line(&right1, cols, config.color_map);
+    result.right2 = compose_segment_line(&right2, cols, config.color_map);
 
     if let Some(viins) = &viins_seg {
-        apply_character_meta(&mut result, viins, config, fast.last_exit_code);
+        apply_prompt_meta(&mut result, Some(viins), config, fast.last_exit_code);
+    } else {
+        apply_prompt_meta(&mut result, None, config, fast.last_exit_code);
     }
 
     result
@@ -215,11 +227,13 @@ fn compose_fish_prompt(
     let mut result = PromptLines {
         left1: compose_fish_line(&core, &optional, &tail, cols, config.color_map),
         left2: String::new(),
+        right1: String::new(),
+        right2: String::new(),
         char_meta: String::new(),
     };
 
     if let Some(viins) = &viins_seg {
-        apply_character_meta(&mut result, viins, config, fast.last_exit_code);
+        apply_prompt_meta(&mut result, Some(viins), config, fast.last_exit_code);
     }
 
     result
@@ -316,18 +330,33 @@ fn character_segment(fast: &FastOutputs, config: &Config) -> Option<Segment> {
         .map(|glyph| config.character.to_segment(glyph, fast.last_exit_code))
 }
 
-fn apply_character_meta(
+fn apply_prompt_meta(
     result: &mut PromptLines,
-    viins: &Segment,
+    viins: Option<&Segment>,
     config: &Config,
     exit_code: i32,
 ) {
-    let vicmd_seg = config
-        .character
-        .mode_segment(&config.character.vicmd, exit_code);
-    let viins_styled = viins.render(config.color_map);
-    let vicmd_styled = vicmd_seg.render(config.color_map);
-    result.char_meta = format!("viins{RS}{viins_styled}{US}vicmd{RS}{vicmd_styled}");
+    let mut entries = Vec::new();
+
+    if !result.right1.is_empty() {
+        entries.push(format!("right1{RS}{}", result.right1));
+    }
+    if !result.right2.is_empty() {
+        entries.push(format!("right2{RS}{}", result.right2));
+    }
+
+    if let Some(viins) = viins {
+        let vicmd_seg = config
+            .character
+            .mode_segment(&config.character.vicmd, exit_code);
+        let viins_styled = viins.render(config.color_map);
+        let vicmd_styled = vicmd_seg.render(config.color_map);
+        entries.push(format!("viins{RS}{viins_styled}"));
+        entries.push(format!("vicmd{RS}{vicmd_styled}"));
+    }
+
+    let separator = US.to_string();
+    result.char_meta = entries.join(&separator);
 }
 
 fn append_custom_modules(
@@ -438,6 +467,36 @@ mod tests {
             lines.left2.contains('\u{276f}'),
             "left2 should have character: {}",
             lines.left2
+        );
+    }
+
+    #[test]
+    fn test_time_can_render_on_right2() {
+        let fast = FastOutputs {
+            time: Some("14:30".to_owned()),
+            ..make_fast_outputs()
+        };
+        let mut config = default_config();
+        config.time.slot = ModuleSlot::Line2;
+        config.time.side = PromptSide::Right;
+        config.time.connector = String::new();
+
+        let lines = compose_prompt(&fast, None, 80, &config);
+
+        assert!(
+            !lines.left2.contains("14:30"),
+            "left2 should not contain right-aligned time: {}",
+            lines.left2
+        );
+        assert!(
+            lines.right2.contains("14:30"),
+            "right2 should contain time: {}",
+            lines.right2
+        );
+        assert!(
+            lines.char_meta.contains("right2\x1e"),
+            "metadata should contain right2: {}",
+            lines.char_meta
         );
     }
 

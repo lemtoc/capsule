@@ -60,6 +60,15 @@ mod tests {
     }
 
     #[test]
+    fn sets_right_prompt() {
+        let script = generate();
+        assert!(
+            script.contains("RPROMPT=$_CAPSULE_RIGHT2"),
+            "script should set RPROMPT from prompt metadata"
+        );
+    }
+
+    #[test]
     fn does_not_add_blank_line_before_prompt() {
         let script = generate();
         assert!(
