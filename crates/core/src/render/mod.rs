@@ -63,6 +63,27 @@ pub(crate) fn compose_segment_line(
     compose_line(segments, cols, color_map)
 }
 
+/// Append a right-aligned prompt fragment to an already composed line.
+///
+/// This is used for non-current prompt lines where zsh `RPROMPT` cannot be
+/// used directly. If the two fragments do not fit, the right fragment is
+/// omitted instead of overlapping the left prompt.
+pub(crate) fn append_right_aligned(left: &mut String, right: &str, cols: usize) {
+    if cols == 0 || right.is_empty() {
+        return;
+    }
+
+    let left_width = display_width(left);
+    let right_width = display_width(right);
+    if left_width + right_width >= cols {
+        return;
+    }
+
+    let padding = cols - left_width - right_width;
+    left.push_str(&" ".repeat(padding));
+    left.push_str(right);
+}
+
 fn render_segments(segments: &[Segment], color_map: ColorMap) -> Vec<String> {
     segments
         .iter()
@@ -273,6 +294,20 @@ mod tests {
         let result = compose_segments(&[], &[], 80, ColorMap::default());
         assert_eq!(result.left1, "");
         assert_eq!(result.left2, "");
+    }
+
+    #[test]
+    fn test_append_right_aligned() {
+        let mut line = "left".to_owned();
+        append_right_aligned(&mut line, "right", 12);
+        assert_eq!(line, "left   right");
+    }
+
+    #[test]
+    fn test_append_right_aligned_omits_when_too_wide() {
+        let mut line = "left".to_owned();
+        append_right_aligned(&mut line, "right", 9);
+        assert_eq!(line, "left");
     }
 
     #[test]

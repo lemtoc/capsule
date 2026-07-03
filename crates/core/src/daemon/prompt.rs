@@ -5,7 +5,7 @@ use crate::{
         TimeModule,
     },
     render::{
-        PromptLines, compose_segment_line, compose_segments, display_width,
+        PromptLines, append_right_aligned, compose_segment_line, compose_segments, display_width,
         segment::Segment,
         style::{Color, ColorMap, Style},
         truncate,
@@ -164,6 +164,8 @@ fn compose_two_line_prompt(
     let mut result = compose_segments(&line1, &line2, cols, config.color_map);
     result.right1 = compose_segment_line(&right1, cols, config.color_map);
     result.right2 = compose_segment_line(&right2, cols, config.color_map);
+    append_right_aligned(&mut result.left1, &result.right1, cols);
+    result.right1.clear();
 
     if let Some(viins) = &viins_seg {
         apply_prompt_meta(&mut result, Some(viins), config, fast.last_exit_code);
@@ -496,6 +498,37 @@ mod tests {
         assert!(
             lines.char_meta.contains("right2\x1e"),
             "metadata should contain right2: {}",
+            lines.char_meta
+        );
+    }
+
+    #[test]
+    fn test_time_can_render_on_right1() {
+        let fast = FastOutputs {
+            time: Some("14:30".to_owned()),
+            ..make_fast_outputs()
+        };
+        let mut config = default_config();
+        config.time.slot = ModuleSlot::Line1;
+        config.time.side = PromptSide::Right;
+        config.time.connector = String::new();
+
+        let lines = compose_prompt(&fast, None, 30, &config);
+
+        assert!(
+            lines.left1.contains("14:30"),
+            "left1 should contain right-aligned time: {}",
+            lines.left1
+        );
+        assert_eq!(
+            display_width(&lines.left1),
+            30,
+            "left1 should fill the prompt width: {}",
+            lines.left1
+        );
+        assert!(
+            !lines.char_meta.contains("right1\x1e"),
+            "line1 right prompt should be materialized into left1: {}",
             lines.char_meta
         );
     }
