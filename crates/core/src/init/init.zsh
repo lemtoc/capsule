@@ -261,7 +261,13 @@ _capsule_async_callback() {
     emulate -L zsh
     local fd=$1
     local line
-    if IFS= read -ru $fd line 2>/dev/null; then
+    local _old_prompt=$PROMPT
+    local -i _updated_prompt=0
+
+    # Avoid recursive zle -F callbacks while reset-prompt redraws the line.
+    zle -F $fd 2>/dev/null
+
+    if IFS= read -rt 0.05 -u $fd line 2>/dev/null; then
         # Check for Update message type
         if [[ "${line%%$'\t'*}" == "U" ]]; then
             # Extract generation (second field)
@@ -284,9 +290,11 @@ _capsule_async_callback() {
                 _capsule_unescape_field _left1 "$_left1"
                 _capsule_unescape_field _left2 "$_left2"
                 _capsule_apply_prompt "$_left1" "$_left2"
-                zle reset-prompt 2>/dev/null
+                [[ "$PROMPT" != "$_old_prompt" ]] && _updated_prompt=1
             fi
         fi
+        (( _updated_prompt )) && zle reset-prompt 2>/dev/null
+        (( _CAPSULE_FD_OUT > 0 )) && zle -F $_CAPSULE_FD_OUT _capsule_async_callback
     else
         # Coproc died — clean up and use fallback
         _capsule_cleanup_fds
