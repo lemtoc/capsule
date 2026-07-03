@@ -9,6 +9,8 @@ use anstyle::{AnsiColor, Color as AnstyleColor, Effects, Style as AnstyleStyle};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Color {
+    /// Terminal default foreground.
+    Default,
     /// Red (ANSI 31).
     Red,
     /// Green (ANSI 32).
@@ -85,7 +87,10 @@ impl Style {
     /// Sets the foreground color.
     #[must_use]
     pub const fn fg(mut self, color: Color) -> Self {
-        self.fg = Some(color);
+        self.fg = match color {
+            Color::Default => None,
+            color => Some(color),
+        };
         self
     }
 
@@ -140,8 +145,10 @@ impl Style {
 
     fn to_anstyle(self, color_map: ColorMap) -> AnstyleStyle {
         let mut style = AnstyleStyle::new();
-        if let Some(color) = self.fg {
-            style = style.fg_color(Some(color_map.anstyle_color(color)));
+        if let Some(color) = self.fg
+            && let Some(color) = color_map.anstyle_color(color)
+        {
+            style = style.fg_color(Some(color));
         }
         let mut effects = Effects::new();
         if self.bold {
@@ -155,24 +162,26 @@ impl Style {
 }
 
 impl ColorMap {
-    const fn fg_code(self, color: Color) -> u8 {
+    const fn fg_code(self, color: Color) -> Option<u8> {
         match color {
-            Color::Red => self.red,
-            Color::Green => self.green,
-            Color::Yellow => self.yellow,
-            Color::Blue => self.blue,
-            Color::Magenta => self.magenta,
-            Color::Cyan => self.cyan,
-            Color::BrightBlack => self.bright_black,
+            Color::Default => None,
+            Color::Red => Some(self.red),
+            Color::Green => Some(self.green),
+            Color::Yellow => Some(self.yellow),
+            Color::Blue => Some(self.blue),
+            Color::Magenta => Some(self.magenta),
+            Color::Cyan => Some(self.cyan),
+            Color::BrightBlack => Some(self.bright_black),
         }
     }
 
-    fn anstyle_color(self, color: Color) -> AnstyleColor {
-        AnstyleColor::Ansi(self.ansi_color(color))
+    fn anstyle_color(self, color: Color) -> Option<AnstyleColor> {
+        self.ansi_color(color).map(AnstyleColor::Ansi)
     }
 
-    fn ansi_color(self, color: Color) -> AnsiColor {
-        match self.fg_code(color) {
+    fn ansi_color(self, color: Color) -> Option<AnsiColor> {
+        let code = self.fg_code(color)?;
+        Some(match code {
             30 => AnsiColor::Black,
             31 => AnsiColor::Red,
             32 => AnsiColor::Green,
@@ -190,7 +199,7 @@ impl ColorMap {
             96 => AnsiColor::BrightCyan,
             97 => AnsiColor::BrightWhite,
             _ => unreachable!("color map validated at deserialization time"),
-        }
+        })
     }
 }
 
@@ -232,6 +241,12 @@ mod tests {
     #[test]
     fn test_render_style_no_style() {
         let style = Style::new();
+        assert_eq!(style.paint("hello"), "hello");
+    }
+
+    #[test]
+    fn test_render_style_default_foreground_is_unstyled() {
+        let style = Style::new().fg(Color::Default);
         assert_eq!(style.paint("hello"), "hello");
     }
 

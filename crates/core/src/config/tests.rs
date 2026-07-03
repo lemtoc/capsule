@@ -259,6 +259,10 @@ bold = true
 fg = "bright_black"
 dimmed = true
 
+[time.style]
+fg = "default"
+bold = false
+
 [color_map]
 blue = 94
 bright_black = 37
@@ -272,6 +276,8 @@ bright_black = 37
     assert_eq!(config.directory.read_only_style.bold, Some(true));
     assert_eq!(config.connectors.style.fg, Some(Color::BrightBlack));
     assert_eq!(config.connectors.style.dimmed, Some(true));
+    assert_eq!(config.time.style.fg, Some(Color::Default));
+    assert_eq!(config.time.style.bold, Some(false));
     assert_eq!(config.color_map.blue, 94);
     assert_eq!(config.color_map.bright_black, 37);
     Ok(())
