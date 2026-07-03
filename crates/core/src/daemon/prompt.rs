@@ -950,6 +950,30 @@ mod tests {
     }
 
     #[test]
+    fn test_cmd_duration_prefix() {
+        let fast = FastOutputs {
+            cmd_duration: Some("3s".to_owned()),
+            ..make_fast_outputs()
+        };
+        let mut config = default_config();
+        config.cmd_duration.connector = String::new();
+        config.cmd_duration.prefix = "+".to_owned();
+
+        let lines = compose_prompt(&fast, None, 80, &config);
+
+        assert!(
+            lines.left1.contains("+3s"),
+            "cmd_duration should attach prefix without a space: {}",
+            lines.left1
+        );
+        assert!(
+            !lines.left1.contains("+ 3s"),
+            "cmd_duration prefix should not render as a connector: {}",
+            lines.left1
+        );
+    }
+
+    #[test]
     fn test_readonly_lock_style() {
         let fast = FastOutputs {
             read_only: true,

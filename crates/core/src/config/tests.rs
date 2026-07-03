@@ -640,6 +640,7 @@ connector = ""
 connector = ""
 [cmd_duration]
 connector = ""
+prefix = "+"
 "#,
     )?;
     let result = read_config(&path)?;
@@ -650,6 +651,7 @@ connector = ""
     assert_eq!(config.git.connector, "");
     assert_eq!(config.time.connector, "");
     assert_eq!(config.cmd_duration.connector, "");
+    assert_eq!(config.cmd_duration.prefix, "+");
     Ok(())
 }
 

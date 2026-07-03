@@ -485,6 +485,8 @@ pub struct CmdDurationConfig {
     pub threshold_ms: u64,
     /// Connector word before the duration segment (e.g., `"took"`).
     pub connector: String,
+    /// Prefix attached directly to the duration text (e.g., `"+"`).
+    pub prefix: String,
     /// Style for the duration segment.
     pub style: StyleConfig,
 }
@@ -495,6 +497,7 @@ impl Default for CmdDurationConfig {
             disabled: false,
             threshold_ms: 2000,
             connector: "took".to_owned(),
+            prefix: String::new(),
             style: StyleConfig::fg_bold(Color::Yellow),
         }
     }
@@ -510,7 +513,7 @@ impl CmdDurationConfig {
     #[must_use]
     pub(crate) fn to_segment(&self, duration_str: &str, connector_style: Style) -> Segment {
         Segment {
-            content: duration_str.to_owned(),
+            content: format!("{}{}", self.prefix, duration_str),
             connector: optional_connector(&self.connector, connector_style),
             icon: None,
             content_style: Some(self.prompt_style()),
