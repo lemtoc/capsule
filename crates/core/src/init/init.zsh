@@ -188,6 +188,8 @@ _capsule_precmd() {
 
     # Build env metadata (null-separated KEY=VALUE pairs)
     local _meta="PATH=${PATH}"
+    local _line1_prefix_text="${(%):-%n@%m }"
+    _meta+=$'\0'"CAPSULE_LINE1_PREFIX_COLUMNS=${#_line1_prefix_text}"
     local _ev
     for _ev in "${_CAPSULE_EXTRA_ENV[@]}"; do
         local _val="${(P)_ev}"

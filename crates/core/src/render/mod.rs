@@ -37,6 +37,7 @@ pub struct PromptLines {
 /// When total width exceeds `cols`, the first segment on line 1
 /// (directory) is truncated. If still too wide, rightmost segments
 /// are dropped one at a time.
+#[cfg(test)]
 #[must_use]
 pub(crate) fn compose_segments(
     line1: &[Segment],
@@ -44,9 +45,21 @@ pub(crate) fn compose_segments(
     cols: usize,
     color_map: ColorMap,
 ) -> PromptLines {
+    compose_segments_with_widths(line1, line2, cols, cols, color_map)
+}
+
+/// Compose [`Segment`]s into prompt lines with separate widths per line.
+#[must_use]
+pub(crate) fn compose_segments_with_widths(
+    line1: &[Segment],
+    line2: &[Segment],
+    line1_cols: usize,
+    line2_cols: usize,
+    color_map: ColorMap,
+) -> PromptLines {
     PromptLines {
-        left1: compose_line(line1, cols, color_map),
-        left2: compose_line(line2, cols, color_map),
+        left1: compose_line(line1, line1_cols, color_map),
+        left2: compose_line(line2, line2_cols, color_map),
         right1: String::new(),
         right2: String::new(),
         char_meta: String::new(),
@@ -68,18 +81,19 @@ pub(crate) fn compose_segment_line(
 /// This is used for non-current prompt lines where zsh `RPROMPT` cannot be
 /// used directly. If the two fragments do not fit, the right fragment is
 /// omitted instead of overlapping the left prompt.
-pub(crate) fn append_right_aligned(left: &mut String, right: &str, cols: usize) {
+pub(crate) fn append_right_aligned(left: &mut String, right: &str, cols: usize, indent: usize) {
     if cols == 0 || right.is_empty() {
         return;
     }
 
+    let usable_cols = cols.saturating_sub(indent);
     let left_width = display_width(left);
     let right_width = display_width(right);
-    if left_width + right_width >= cols {
+    if left_width + right_width >= usable_cols {
         return;
     }
 
-    let padding = cols - left_width - right_width;
+    let padding = usable_cols - left_width - right_width;
     left.push_str(&" ".repeat(padding));
     left.push_str(right);
 }
@@ -299,15 +313,22 @@ mod tests {
     #[test]
     fn test_append_right_aligned() {
         let mut line = "left".to_owned();
-        append_right_aligned(&mut line, "right", 12);
+        append_right_aligned(&mut line, "right", 12, 0);
         assert_eq!(line, "left   right");
     }
 
     #[test]
     fn test_append_right_aligned_omits_when_too_wide() {
         let mut line = "left".to_owned();
-        append_right_aligned(&mut line, "right", 9);
+        append_right_aligned(&mut line, "right", 9, 0);
         assert_eq!(line, "left");
+    }
+
+    #[test]
+    fn test_append_right_aligned_leaves_indent() {
+        let mut line = "left".to_owned();
+        append_right_aligned(&mut line, "right", 12, 1);
+        assert_eq!(line, "left  right");
     }
 
     #[test]

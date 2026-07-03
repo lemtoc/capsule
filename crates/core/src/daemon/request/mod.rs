@@ -397,6 +397,7 @@ struct SlowUpdateTarget {
     sent_left2: String,
     fast: prompt::FastOutputs,
     cols: u16,
+    line1_prefix_cols: u16,
     config: Arc<crate::config::Config>,
 }
 
@@ -466,6 +467,19 @@ async fn detect_custom_modules(input: &DetectInput<'_>) -> Vec<CustomModuleInfo>
     RequestFacts::arbitrate_detected_slots(results)
 }
 
+fn extract_line1_prefix_cols(env_vars: &mut Vec<(String, String)>) -> u16 {
+    let mut line1_prefix_cols = 0;
+    env_vars.retain(|(name, value)| {
+        if name == "CAPSULE_LINE1_PREFIX_COLUMNS" {
+            line1_prefix_cols = value.parse::<u16>().unwrap_or(0);
+            false
+        } else {
+            true
+        }
+    });
+    line1_prefix_cols
+}
+
 async fn handle_request<G: GitProvider + Send + 'static>(
     req: Request,
     ctx: RequestCtx<G>,
@@ -483,8 +497,9 @@ async fn handle_request<G: GitProvider + Send + 'static>(
         last_exit_code,
         duration_ms,
         keymap,
-        env_vars,
+        mut env_vars,
     } = req;
+    let line1_prefix_cols = extract_line1_prefix_cols(&mut env_vars);
 
     let config_snap = {
         let mut reloadable = ctx.config.lock().await;
@@ -522,6 +537,7 @@ async fn handle_request<G: GitProvider + Send + 'static>(
         generation,
         cwd,
         cols,
+        line1_prefix_cols,
         last_exit_code,
         duration_ms,
         keymap,
@@ -591,10 +607,11 @@ async fn handle_request<G: GitProvider + Send + 'static>(
         SlowWorkClaim::Pending { .. } => None,
     };
 
-    let lines = prompt::compose_prompt(
+    let lines = prompt::compose_prompt_with_prefix(
         &fast,
         cached_slow.as_deref(),
         usize::from(gated.cols),
+        usize::from(gated.line1_prefix_cols),
         &config_snap.config,
     );
 
@@ -658,6 +675,7 @@ async fn handle_request<G: GitProvider + Send + 'static>(
         sent_left2,
         fast: fast.clone(),
         cols: gated.cols,
+        line1_prefix_cols: gated.line1_prefix_cols,
         config: Arc::clone(&slow_config),
     }));
 
@@ -678,6 +696,7 @@ async fn try_send_slow_update(
     sent_left1: &str,
     sent_left2: &str,
     cols: u16,
+    line1_prefix_cols: u16,
     config: &crate::config::Config,
 ) {
     let is_current = {
@@ -692,7 +711,13 @@ async fn try_send_slow_update(
         return;
     }
 
-    let new_lines = prompt::compose_prompt(fast, Some(slow), usize::from(cols), config);
+    let new_lines = prompt::compose_prompt_with_prefix(
+        fast,
+        Some(slow),
+        usize::from(cols),
+        usize::from(line1_prefix_cols),
+        config,
+    );
     if new_lines.left1 == sent_left1 && new_lines.left2 == sent_left2 {
         return;
     }
@@ -727,6 +752,7 @@ async fn wait_for_slow_update(target: SlowUpdateTarget) {
         sent_left2,
         fast,
         cols,
+        line1_prefix_cols,
         config,
     } = target;
 
@@ -749,6 +775,7 @@ async fn wait_for_slow_update(target: SlowUpdateTarget) {
         &sent_left1,
         &sent_left2,
         cols,
+        line1_prefix_cols,
         &config,
     )
     .await;

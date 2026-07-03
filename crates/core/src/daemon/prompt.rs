@@ -5,7 +5,8 @@ use crate::{
         TimeModule,
     },
     render::{
-        PromptLines, append_right_aligned, compose_segment_line, compose_segments, display_width,
+        PromptLines, append_right_aligned, compose_segment_line, compose_segments_with_widths,
+        display_width,
         segment::Segment,
         style::{Color, ColorMap, Style},
         truncate,
@@ -16,6 +17,7 @@ use crate::{
 const RS: char = '\x1e';
 /// ASCII Unit Separator — delimits entries in `char_meta`.
 const US: char = '\x1f';
+const RIGHT_PROMPT_INDENT: usize = 1;
 
 #[derive(Debug, Clone)]
 pub(super) struct FastOutputs {
@@ -82,14 +84,27 @@ pub(super) fn run_fast_modules(
 /// Prompt layout (Starship-compatible):
 /// - Info line (left1):  `[directory] on [git] via [toolchain] [cmd_duration]`
 /// - Input line (left2): `at [time] [character]`
-pub(super) fn compose_prompt(
+#[cfg(test)]
+fn compose_prompt(
     fast: &FastOutputs,
     slow: Option<&SlowOutput>,
     cols: usize,
     config: &Config,
 ) -> PromptLines {
+    compose_prompt_with_prefix(fast, slow, cols, 0, config)
+}
+
+pub(super) fn compose_prompt_with_prefix(
+    fast: &FastOutputs,
+    slow: Option<&SlowOutput>,
+    cols: usize,
+    line1_prefix_cols: usize,
+    config: &Config,
+) -> PromptLines {
     match config.layout {
-        PromptLayout::TwoLine => compose_two_line_prompt(fast, slow, cols, config),
+        PromptLayout::TwoLine => {
+            compose_two_line_prompt(fast, slow, cols, line1_prefix_cols, config)
+        }
         PromptLayout::Fish => compose_fish_prompt(fast, slow, cols, config),
     }
 }
@@ -98,6 +113,7 @@ fn compose_two_line_prompt(
     fast: &FastOutputs,
     slow: Option<&SlowOutput>,
     cols: usize,
+    line1_prefix_cols: usize,
     config: &Config,
 ) -> PromptLines {
     let connector_style = config.connectors.prompt_style();
@@ -161,10 +177,24 @@ fn compose_two_line_prompt(
         line2.push(seg.clone());
     }
 
-    let mut result = compose_segments(&line1, &line2, cols, config.color_map);
-    result.right1 = compose_segment_line(&right1, cols, config.color_map);
+    let line1_cols = cols.saturating_sub(line1_prefix_cols);
+    let mut right1_rendered = compose_segment_line(&right1, line1_cols, config.color_map);
+    let line1_render_cols = if right1_rendered.is_empty() {
+        line1_cols
+    } else {
+        line1_cols.saturating_sub(RIGHT_PROMPT_INDENT)
+    };
+
+    let mut result =
+        compose_segments_with_widths(&line1, &line2, line1_render_cols, cols, config.color_map);
+    result.right1 = std::mem::take(&mut right1_rendered);
     result.right2 = compose_segment_line(&right2, cols, config.color_map);
-    append_right_aligned(&mut result.left1, &result.right1, cols);
+    append_right_aligned(
+        &mut result.left1,
+        &result.right1,
+        line1_cols,
+        RIGHT_PROMPT_INDENT,
+    );
     result.right1.clear();
 
     if let Some(viins) = &viins_seg {
@@ -522,14 +552,40 @@ mod tests {
         );
         assert_eq!(
             display_width(&lines.left1),
-            30,
-            "left1 should fill the prompt width: {}",
+            29,
+            "left1 should leave right prompt indent: {}",
             lines.left1
         );
         assert!(
             !lines.char_meta.contains("right1\x1e"),
             "line1 right prompt should be materialized into left1: {}",
             lines.char_meta
+        );
+    }
+
+    #[test]
+    fn test_time_on_right1_reserves_prefix_width() {
+        let fast = FastOutputs {
+            time: Some("14:30".to_owned()),
+            ..make_fast_outputs()
+        };
+        let mut config = default_config();
+        config.time.slot = ModuleSlot::Line1;
+        config.time.side = PromptSide::Right;
+        config.time.connector = String::new();
+
+        let lines = compose_prompt_with_prefix(&fast, None, 30, 10, &config);
+
+        assert!(
+            lines.left1.contains("14:30"),
+            "left1 should contain right-aligned time: {}",
+            lines.left1
+        );
+        assert_eq!(
+            display_width(&lines.left1),
+            19,
+            "left1 should fit after prefix and indent: {}",
+            lines.left1
         );
     }
 

@@ -23,6 +23,7 @@ pub(super) struct GatedPromptRequest {
     pub(super) generation: PromptGeneration,
     pub(super) cwd: String,
     pub(super) cols: u16,
+    pub(super) line1_prefix_cols: u16,
     pub(super) last_exit_code: i32,
     pub(super) duration_ms: Option<u64>,
     pub(super) keymap: String,
