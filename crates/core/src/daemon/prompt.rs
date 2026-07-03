@@ -868,6 +868,27 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_time_connector_omits_connector() {
+        let fast = FastOutputs {
+            time: Some("17:44".to_owned()),
+            ..make_fast_outputs()
+        };
+        let mut config = default_config();
+        config.time.connector = String::new();
+        let lines = compose_prompt(&fast, None, 80, &config);
+        assert!(
+            lines.left2.contains("17:44"),
+            "line2 should contain time: {}",
+            lines.left2
+        );
+        assert!(
+            !lines.left2.contains("at"),
+            "time connector should be omitted: {}",
+            lines.left2
+        );
+    }
+
+    #[test]
     fn test_custom_git_icon() {
         let fast = make_fast_outputs();
         let slow = SlowOutput {

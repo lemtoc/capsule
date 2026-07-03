@@ -358,14 +358,7 @@ impl GitConfig {
     pub(crate) fn to_segment(&self, git_output: &str, connector_style: Style) -> Segment {
         Segment {
             content: git_output.to_owned(),
-            connector: if self.connector.is_empty() {
-                None
-            } else {
-                Some(Connector {
-                    word: self.connector.clone(),
-                    style: connector_style,
-                })
-            },
+            connector: optional_connector(&self.connector, connector_style),
             icon: Some(Icon {
                 glyph: self.icon.clone(),
                 style: self.prompt_style(),
@@ -463,10 +456,7 @@ impl TimeConfig {
     pub(crate) fn to_segment(&self, time_str: &str, connector_style: Style) -> Segment {
         Segment {
             content: time_str.to_owned(),
-            connector: Some(Connector {
-                word: self.connector.clone(),
-                style: connector_style,
-            }),
+            connector: optional_connector(&self.connector, connector_style),
             icon: None,
             content_style: Some(self.prompt_style()),
         }
@@ -515,10 +505,7 @@ impl CmdDurationConfig {
     pub(crate) fn to_segment(&self, duration_str: &str, connector_style: Style) -> Segment {
         Segment {
             content: duration_str.to_owned(),
-            connector: Some(Connector {
-                word: self.connector.clone(),
-                style: connector_style,
-            }),
+            connector: optional_connector(&self.connector, connector_style),
             icon: None,
             content_style: Some(self.prompt_style()),
         }
@@ -528,6 +515,17 @@ impl CmdDurationConfig {
         let defaults = Self::default();
         self.style = self.style.merge_with(defaults.style);
         self
+    }
+}
+
+fn optional_connector(word: &str, style: Style) -> Option<Connector> {
+    if word.is_empty() {
+        None
+    } else {
+        Some(Connector {
+            word: word.to_owned(),
+            style,
+        })
     }
 }
 
