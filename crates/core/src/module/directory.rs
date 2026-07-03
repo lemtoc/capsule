@@ -106,9 +106,7 @@ fn path_components(path: &Path) -> Vec<String> {
 }
 
 fn shorten_component(component: &str) -> String {
-    let chars: Vec<char> = component.chars().collect();
-    let width = if chars.len() <= 4 { 1 } else { 2 };
-    chars.into_iter().take(width).collect()
+    component.chars().take(1).collect()
 }
 
 #[cfg(test)]
@@ -217,7 +215,7 @@ mod tests {
         let output = DirectoryModule::new().render(&ctx);
         assert_eq!(
             output.map(|o| o.content),
-            Some("~/d/w/ti/tipextra-frontend/frontend".to_owned()),
+            Some("~/d/w/t/tipextra-frontend/frontend".to_owned()),
             "should shorten ancestors before the repo root"
         );
         Ok(())
@@ -232,7 +230,7 @@ mod tests {
         let output = DirectoryModule::new().render(&ctx);
         assert_eq!(
             output.map(|o| o.content),
-            Some("~/no/pr/capsule".to_owned()),
+            Some("~/n/p/capsule".to_owned()),
             "should shorten ancestors and preserve the current directory when no .git"
         );
     }

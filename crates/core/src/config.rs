@@ -10,10 +10,23 @@ use crate::render::{
     style::{Color, ColorMap, Style},
 };
 
+/// Prompt layout strategy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PromptLayout {
+    /// Starship-compatible two-line layout.
+    #[default]
+    TwoLine,
+    /// Fish-inspired single-line layout.
+    Fish,
+}
+
 /// Top-level configuration.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Prompt layout strategy.
+    pub layout: PromptLayout,
     /// Character module settings.
     pub character: CharacterConfig,
     /// Directory module settings.

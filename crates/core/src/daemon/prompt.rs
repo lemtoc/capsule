@@ -1,9 +1,14 @@
 use crate::{
-    config::{Config, ModuleSlot},
+    config::{Config, ModuleSlot, PromptLayout},
     module::{
-        CmdDurationModule, CustomModuleInfo, DirectoryModule, Module, RenderContext, TimeModule,
+        CmdDurationModule, CustomModuleInfo, DirectoryModule, Module, RenderContext, StatusModule,
+        TimeModule,
     },
-    render::{PromptLines, compose_segments, segment::Segment, style::Style},
+    render::{
+        PromptLines, compose_segments,
+        segment::Segment,
+        style::{Color, Style},
+    },
 };
 
 /// ASCII Record Separator — delimits key from value in `char_meta` entries.
@@ -16,6 +21,7 @@ pub(super) struct FastOutputs {
     directory: Option<String>,
     cmd_duration: Option<String>,
     time: Option<String>,
+    status: Option<String>,
     character: Option<String>,
     last_exit_code: i32,
     read_only: bool,
@@ -60,6 +66,7 @@ pub(super) fn run_fast_modules(
                 .map(|output| output.content)
         },
         time,
+        status: StatusModule::new().render(ctx).map(|output| output.content),
         character: if config.character.disabled {
             None
         } else {
@@ -75,6 +82,18 @@ pub(super) fn run_fast_modules(
 /// - Info line (left1):  `[directory] on [git] via [toolchain] [cmd_duration]`
 /// - Input line (left2): `at [time] [character]`
 pub(super) fn compose_prompt(
+    fast: &FastOutputs,
+    slow: Option<&SlowOutput>,
+    cols: usize,
+    config: &Config,
+) -> PromptLines {
+    match config.layout {
+        PromptLayout::TwoLine => compose_two_line_prompt(fast, slow, cols, config),
+        PromptLayout::Fish => compose_fish_prompt(fast, slow, cols, config),
+    }
+}
+
+fn compose_two_line_prompt(
     fast: &FastOutputs,
     slow: Option<&SlowOutput>,
     cols: usize,
@@ -124,10 +143,7 @@ pub(super) fn compose_prompt(
         line2.push(config.time.to_segment(time, connector_style));
     }
 
-    let viins_seg = fast
-        .character
-        .as_deref()
-        .map(|glyph| config.character.to_segment(glyph, fast.last_exit_code));
+    let viins_seg = character_segment(fast, config);
     if let Some(ref seg) = viins_seg {
         line2.push(seg.clone());
     }
@@ -135,15 +151,92 @@ pub(super) fn compose_prompt(
     let mut result = compose_segments(&line1, &line2, cols, config.color_map);
 
     if let Some(viins) = &viins_seg {
-        let vicmd_seg = config
-            .character
-            .mode_segment(&config.character.vicmd, fast.last_exit_code);
-        let viins_styled = viins.render(config.color_map);
-        let vicmd_styled = vicmd_seg.render(config.color_map);
-        result.char_meta = format!("viins{RS}{viins_styled}{US}vicmd{RS}{vicmd_styled}");
+        apply_character_meta(&mut result, viins, config, fast.last_exit_code);
     }
 
     result
+}
+
+fn compose_fish_prompt(
+    fast: &FastOutputs,
+    slow: Option<&SlowOutput>,
+    cols: usize,
+    config: &Config,
+) -> PromptLines {
+    let connector_style = config.connectors.prompt_style();
+    let mut line = Vec::with_capacity(6);
+
+    if let Some(dir) = &fast.directory {
+        line.push(
+            config
+                .directory
+                .to_segment(dir, fast.read_only, config.color_map),
+        );
+    }
+
+    if let Some(git) = slow.and_then(|output| output.git.as_deref()) {
+        line.push(Segment {
+            content: format!("({git})"),
+            connector: None,
+            icon: None,
+            content_style: None,
+        });
+    }
+
+    let slow_custom_modules = slow.map(|output| output.custom_modules.as_slice());
+    append_custom_modules(
+        &mut line,
+        &fast.custom_modules,
+        slow_custom_modules,
+        ModuleSlot::Line1,
+        connector_style,
+    );
+
+    if let Some(duration) = &fast.cmd_duration {
+        line.push(config.cmd_duration.to_segment(duration, connector_style));
+    }
+
+    if let Some(status) = &fast.status {
+        line.push(Segment {
+            content: format!("[{status}]"),
+            connector: None,
+            icon: None,
+            content_style: Some(Style::new().fg(Color::Red).bold()),
+        });
+    }
+
+    let viins_seg = character_segment(fast, config);
+    if let Some(ref seg) = viins_seg {
+        line.push(seg.clone());
+    }
+
+    let mut result = compose_segments(&line, &[], cols, config.color_map);
+
+    if let Some(viins) = &viins_seg {
+        apply_character_meta(&mut result, viins, config, fast.last_exit_code);
+    }
+
+    result
+}
+
+fn character_segment(fast: &FastOutputs, config: &Config) -> Option<Segment> {
+    fast.character
+        .as_deref()
+        .map(|glyph| config.character.to_segment(glyph, fast.last_exit_code))
+}
+
+fn apply_character_meta(
+    result: &mut PromptLines,
+    viins: &Segment,
+    config: &Config,
+    exit_code: i32,
+) {
+    let vicmd_seg = config
+        .character
+        .mode_segment(&config.character.vicmd, exit_code);
+    let viins_styled = viins.render(config.color_map);
+    let vicmd_styled = vicmd_seg.render(config.color_map);
+    result.char_meta = format!("viins{RS}{viins_styled}{US}vicmd{RS}{vicmd_styled}");
 }
 
 fn append_custom_modules(
@@ -181,6 +274,7 @@ mod tests {
             directory: Some("/tmp".to_owned()),
             cmd_duration: None,
             time: None,
+            status: None,
             character: Some("\u{276f}".to_owned()),
             last_exit_code: 0,
             read_only: false,
@@ -222,6 +316,13 @@ mod tests {
         line.contains("\x1b[33m")
             || contains_style_sequence(line, &[1, 33])
             || contains_style_sequence(line, &[33, 1])
+    }
+
+    fn fish_config() -> Config {
+        let mut config = default_config();
+        config.layout = PromptLayout::Fish;
+        config.character.glyph = ">".to_owned();
+        config
     }
 
     #[test]
@@ -831,6 +932,98 @@ mod tests {
             lines.left2.contains(viins_styled),
             "viins styled string should appear in left2: left2={}, viins={}",
             lines.left2,
+            viins_styled
+        );
+    }
+
+    #[test]
+    fn test_fish_layout_single_line() {
+        let fast = FastOutputs {
+            directory: Some("~/.dotfiles".to_owned()),
+            character: Some(">".to_owned()),
+            ..make_fast_outputs()
+        };
+        let slow = SlowOutput {
+            git: Some("main".to_owned()),
+            ..make_slow_output()
+        };
+        let lines = compose_prompt(&fast, Some(&slow), 80, &fish_config());
+
+        assert!(
+            lines.left1.contains("~/.dotfiles"),
+            "left1: {}",
+            lines.left1
+        );
+        assert!(
+            lines.left1.contains("(main)"),
+            "git branch should be wrapped like fish: {}",
+            lines.left1
+        );
+        assert!(lines.left1.contains('>'), "left1: {}", lines.left1);
+        assert_eq!(lines.left2, "", "fish layout should not use line2");
+    }
+
+    #[test]
+    fn test_fish_layout_status_on_line1() {
+        let fast = FastOutputs {
+            status: Some("1".to_owned()),
+            character: Some(">".to_owned()),
+            last_exit_code: 1,
+            ..make_fast_outputs()
+        };
+        let lines = compose_prompt(&fast, None, 80, &fish_config());
+
+        assert!(
+            lines.left1.contains("[1]"),
+            "status should appear before the character: {}",
+            lines.left1
+        );
+        assert!(
+            lines.left1.contains("\x1b[31m"),
+            "status should be red: {}",
+            lines.left1
+        );
+        assert_eq!(lines.left2, "", "fish layout should not use line2");
+    }
+
+    #[test]
+    fn test_fish_layout_keeps_line1_custom_modules() {
+        let fast = make_fast_outputs();
+        let slow = SlowOutput {
+            git: Some("main".to_owned()),
+            custom_modules: vec![make_toolchain_module("rust", "v1.82.0")],
+        };
+        let lines = compose_prompt(&fast, Some(&slow), 80, &fish_config());
+
+        assert!(
+            lines.left1.contains("v1.82.0"),
+            "line1 module should remain available in fish layout: {}",
+            lines.left1
+        );
+        assert_eq!(lines.left2, "", "fish layout should not use line2");
+    }
+
+    #[test]
+    fn test_fish_char_meta_viins_matches_left1() {
+        let fast = FastOutputs {
+            character: Some(">".to_owned()),
+            ..make_fast_outputs()
+        };
+        let lines = compose_prompt(&fast, None, 80, &fish_config());
+        let viins_entry = lines
+            .char_meta
+            .split('\x1f')
+            .find(|entry| entry.starts_with("viins\x1e"));
+        let viins_styled = viins_entry.map_or("", |entry| &entry["viins\x1e".len()..]);
+
+        assert!(
+            !viins_styled.is_empty(),
+            "viins styled string should not be empty"
+        );
+        assert!(
+            lines.left1.contains(viins_styled),
+            "viins styled string should appear in left1: left1={}, viins={}",
+            lines.left1,
             viins_styled
         );
     }

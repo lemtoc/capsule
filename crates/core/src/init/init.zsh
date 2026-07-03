@@ -36,7 +36,7 @@ _capsule_init() {
     typeset -g  _CAPSULE_CHAR_CURRENT=""
 
     # Fallback prompt
-    typeset -g _CAPSULE_FALLBACK='%~ %# '
+    typeset -g _CAPSULE_FALLBACK='%F{green}%n%f@%m %F{green}%~%f %# '
 
     # Set initial prompt (ensures PROMPT is non-empty even if coproc fails)
     PROMPT=$_CAPSULE_FALLBACK
@@ -316,7 +316,11 @@ _capsule_parse_char_meta() {
 }
 
 _capsule_apply_prompt() {
-    PROMPT="${1}"$'\n'"${2} "
+    if [[ -z "$2" ]]; then
+        PROMPT="%F{green}%n%f@%m ${1} "
+    else
+        PROMPT="${1}"$'\n'"${2} "
+    fi
     if [[ -n "$_CAPSULE_CHAR_DEFAULT" && "${KEYMAP:-main}" == "vicmd" ]]; then
         local _target=${_CAPSULE_CHAR_MAP[vicmd]:-$_CAPSULE_CHAR_DEFAULT}
         PROMPT=${PROMPT/$_CAPSULE_CHAR_DEFAULT/$_target}

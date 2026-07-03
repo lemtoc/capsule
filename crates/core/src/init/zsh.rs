@@ -47,7 +47,10 @@ mod tests {
     #[test]
     fn contains_fallback_prompt() {
         let script = generate();
-        assert!(script.contains("%~ %# "), "missing fallback prompt");
+        assert!(
+            script.contains("%F{green}%n%f@%m %F{green}%~%f %# "),
+            "missing fallback prompt"
+        );
     }
 
     #[test]
