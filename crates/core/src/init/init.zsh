@@ -319,7 +319,7 @@ _capsule_apply_prompt() {
     if [[ -z "$2" ]]; then
         PROMPT="%F{green}%n%f@%m ${1} "
     else
-        PROMPT="${1}"$'\n'"${2} "
+        PROMPT="%F{green}%n%f@%m ${1}"$'\n'"${2} "
     fi
     if [[ -n "$_CAPSULE_CHAR_DEFAULT" && "${KEYMAP:-main}" == "vicmd" ]]; then
         local _target=${_CAPSULE_CHAR_MAP[vicmd]:-$_CAPSULE_CHAR_DEFAULT}

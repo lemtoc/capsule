@@ -5,9 +5,10 @@ use crate::{
         TimeModule,
     },
     render::{
-        PromptLines, compose_segments,
+        PromptLines, compose_segments, display_width,
         segment::Segment,
-        style::{Color, Style},
+        style::{Color, ColorMap, Style},
+        truncate,
     },
 };
 
@@ -143,6 +144,10 @@ fn compose_two_line_prompt(
         line2.push(config.time.to_segment(time, connector_style));
     }
 
+    if let Some(status) = &fast.status {
+        line2.push(status_segment(status));
+    }
+
     let viins_seg = character_segment(fast, config);
     if let Some(ref seg) = viins_seg {
         line2.push(seg.clone());
@@ -164,10 +169,10 @@ fn compose_fish_prompt(
     config: &Config,
 ) -> PromptLines {
     let connector_style = config.connectors.prompt_style();
-    let mut line = Vec::with_capacity(6);
+    let mut core = Vec::with_capacity(2);
 
     if let Some(dir) = &fast.directory {
-        line.push(
+        core.push(
             config
                 .directory
                 .to_segment(dir, fast.read_only, config.color_map),
@@ -175,7 +180,7 @@ fn compose_fish_prompt(
     }
 
     if let Some(git) = slow.and_then(|output| output.git.as_deref()) {
-        line.push(Segment {
+        core.push(Segment {
             content: format!("({git})"),
             connector: None,
             icon: None,
@@ -184,8 +189,9 @@ fn compose_fish_prompt(
     }
 
     let slow_custom_modules = slow.map(|output| output.custom_modules.as_slice());
+    let mut optional = Vec::new();
     append_custom_modules(
-        &mut line,
+        &mut optional,
         &fast.custom_modules,
         slow_custom_modules,
         ModuleSlot::Line1,
@@ -193,30 +199,115 @@ fn compose_fish_prompt(
     );
 
     if let Some(duration) = &fast.cmd_duration {
-        line.push(config.cmd_duration.to_segment(duration, connector_style));
+        optional.push(config.cmd_duration.to_segment(duration, connector_style));
     }
 
+    let mut tail = Vec::with_capacity(2);
     if let Some(status) = &fast.status {
-        line.push(Segment {
-            content: format!("[{status}]"),
-            connector: None,
-            icon: None,
-            content_style: Some(Style::new().fg(Color::Red).bold()),
-        });
+        tail.push(status_segment(status));
     }
 
     let viins_seg = character_segment(fast, config);
     if let Some(ref seg) = viins_seg {
-        line.push(seg.clone());
+        tail.push(seg.clone());
     }
 
-    let mut result = compose_segments(&line, &[], cols, config.color_map);
+    let mut result = PromptLines {
+        left1: compose_fish_line(&core, &optional, &tail, cols, config.color_map),
+        left2: String::new(),
+        char_meta: String::new(),
+    };
 
     if let Some(viins) = &viins_seg {
         apply_character_meta(&mut result, viins, config, fast.last_exit_code);
     }
 
     result
+}
+
+fn status_segment(status: &str) -> Segment {
+    Segment {
+        content: format!("[{status}]"),
+        connector: None,
+        icon: None,
+        content_style: Some(Style::new().fg(Color::Red).bold()),
+    }
+}
+
+fn compose_fish_line(
+    core: &[Segment],
+    optional: &[Segment],
+    tail: &[Segment],
+    cols: usize,
+    color_map: ColorMap,
+) -> String {
+    if cols == 0 {
+        return String::new();
+    }
+
+    for optional_len in (0..=optional.len()).rev() {
+        let mut segments = Vec::with_capacity(core.len() + optional_len + tail.len());
+        segments.extend_from_slice(core);
+        segments.extend_from_slice(&optional[..optional_len]);
+        segments.extend_from_slice(tail);
+
+        let rendered = render_prompt_segments(&segments, color_map);
+        let joined = join_prompt_parts(&rendered);
+        if display_width(&joined) <= cols {
+            return joined;
+        }
+    }
+
+    compose_with_preserved_tail(core, tail, cols, color_map)
+}
+
+fn compose_with_preserved_tail(
+    core: &[Segment],
+    tail: &[Segment],
+    cols: usize,
+    color_map: ColorMap,
+) -> String {
+    let rendered_core = render_prompt_segments(core, color_map);
+    let rendered_tail = render_prompt_segments(tail, color_map);
+    let core_joined = join_prompt_parts(&rendered_core);
+    let tail_joined = join_prompt_parts(&rendered_tail);
+
+    if tail_joined.is_empty() {
+        return truncate(&core_joined, cols);
+    }
+
+    let tail_width = display_width(&tail_joined);
+    if tail_width >= cols {
+        return truncate(&tail_joined, cols);
+    }
+
+    let separator_width = usize::from(!core_joined.is_empty());
+    let available_core_width = cols.saturating_sub(tail_width + separator_width);
+    let core_fit = truncate(&core_joined, available_core_width);
+
+    if core_fit.is_empty() {
+        tail_joined
+    } else {
+        format!("{core_fit} {tail_joined}")
+    }
+}
+
+fn render_prompt_segments(segments: &[Segment], color_map: ColorMap) -> Vec<String> {
+    segments
+        .iter()
+        .map(|segment| segment.render(color_map))
+        .collect()
+}
+
+fn join_prompt_parts(parts: &[String]) -> String {
+    let mut out = String::new();
+    for part in parts.iter().filter(|part| !part.is_empty()) {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(part);
+    }
+    out
 }
 
 fn character_segment(fast: &FastOutputs, config: &Config) -> Option<Segment> {
@@ -412,6 +503,26 @@ mod tests {
         assert!(
             lines.left2.contains("\x1b[31m"),
             "character should be red on error: {}",
+            lines.left2
+        );
+    }
+
+    #[test]
+    fn test_status_on_line2() {
+        let fast = FastOutputs {
+            status: Some("1".to_owned()),
+            last_exit_code: 1,
+            ..make_fast_outputs()
+        };
+        let lines = compose_prompt(&fast, None, 80, &default_config());
+        assert!(
+            lines.left2.contains("[1]"),
+            "line2 should contain non-zero status: {}",
+            lines.left2
+        );
+        assert!(
+            lines.left2.contains("\x1b[31m"),
+            "status should be red: {}",
             lines.left2
         );
     }
@@ -779,6 +890,28 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_git_connector_keeps_icon_without_connector() {
+        let fast = make_fast_outputs();
+        let slow = SlowOutput {
+            git: Some("main".to_owned()),
+            ..make_slow_output()
+        };
+        let mut config = default_config();
+        config.git.connector = String::new();
+        let lines = compose_prompt(&fast, Some(&slow), 80, &config);
+        assert!(
+            !lines.left1.contains("on"),
+            "git connector should be omitted: {}",
+            lines.left1
+        );
+        assert!(
+            lines.left1.contains('\u{f418}'),
+            "git icon should remain: {}",
+            lines.left1
+        );
+    }
+
+    #[test]
     fn test_custom_cmd_duration_color() {
         let fast = FastOutputs {
             cmd_duration: Some("3s".to_owned()),
@@ -1001,6 +1134,45 @@ mod tests {
             lines.left1
         );
         assert_eq!(lines.left2, "", "fish layout should not use line2");
+    }
+
+    #[test]
+    fn test_fish_layout_preserves_character_when_truncated() {
+        let fast = FastOutputs {
+            directory: Some("~/dev/work/tip-extra/tipextra-frontend/frontend".to_owned()),
+            status: Some("1".to_owned()),
+            character: Some(">".to_owned()),
+            last_exit_code: 1,
+            custom_modules: vec![make_toolchain_module("rust", "v1.82.0")],
+            ..make_fast_outputs()
+        };
+        let slow = SlowOutput {
+            git: Some("hotfix/1660-hide-lcc-link-civil-construction-dev".to_owned()),
+            custom_modules: vec![],
+        };
+        let lines = compose_prompt(&fast, Some(&slow), 40, &fish_config());
+
+        assert!(
+            lines.left1.contains("[1]"),
+            "status should remain in truncated fish prompt: {}",
+            lines.left1
+        );
+        assert!(
+            lines.left1.contains('>'),
+            "character should remain in truncated fish prompt: {}",
+            lines.left1
+        );
+        assert!(
+            !lines.left1.contains("v1.82.0"),
+            "optional modules should be dropped before status/character: {}",
+            lines.left1
+        );
+        assert!(
+            display_width(&lines.left1) <= 40,
+            "fish prompt should fit requested columns: width={}, line={}",
+            display_width(&lines.left1),
+            lines.left1
+        );
     }
 
     #[test]

@@ -358,10 +358,14 @@ impl GitConfig {
     pub(crate) fn to_segment(&self, git_output: &str, connector_style: Style) -> Segment {
         Segment {
             content: git_output.to_owned(),
-            connector: Some(Connector {
-                word: self.connector.clone(),
-                style: connector_style,
-            }),
+            connector: if self.connector.is_empty() {
+                None
+            } else {
+                Some(Connector {
+                    word: self.connector.clone(),
+                    style: connector_style,
+                })
+            },
             icon: Some(Icon {
                 glyph: self.icon.clone(),
                 style: self.prompt_style(),
