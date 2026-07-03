@@ -139,7 +139,7 @@ fn compose_two_line_prompt(
         &fast.custom_modules,
         slow_custom_modules,
         ModuleSlot::Line1,
-        connector_style,
+        config,
     );
 
     if let Some(duration) = &fast.cmd_duration {
@@ -155,7 +155,7 @@ fn compose_two_line_prompt(
         &fast.custom_modules,
         slow_custom_modules,
         ModuleSlot::Line2,
-        connector_style,
+        config,
     );
 
     if let Some(time) = &fast.time {
@@ -239,7 +239,7 @@ fn compose_fish_prompt(
         &fast.custom_modules,
         slow_custom_modules,
         ModuleSlot::Line1,
-        connector_style,
+        config,
     );
 
     if let Some(duration) = &fast.cmd_duration {
@@ -396,13 +396,23 @@ fn append_custom_modules(
     fast_modules: &[CustomModuleInfo],
     slow_modules: Option<&[CustomModuleInfo]>,
     slot: ModuleSlot,
-    connector_style: Style,
+    config: &Config,
 ) {
-    for module in fast_modules
+    let mut modules = fast_modules
         .iter()
         .chain(slow_modules.unwrap_or(&[]).iter())
         .filter(|module| module.slot == slot)
-    {
+        .collect::<Vec<_>>();
+    modules.sort_by_key(|module| {
+        config
+            .module
+            .iter()
+            .position(|def| def.name == module.name)
+            .unwrap_or(usize::MAX)
+    });
+    let connector_style = config.connectors.prompt_style();
+
+    for module in modules {
         line.push(module.to_segment(connector_style));
     }
 }
@@ -411,7 +421,7 @@ fn append_custom_modules(
 mod tests {
     use super::*;
     use crate::{
-        config::Config,
+        config::{Config, ModuleDef, ModuleWhen, StyleConfig},
         module::preset_module_defs,
         render::style::{Color, Style},
         test_utils::contains_style_sequence,
@@ -462,6 +472,20 @@ mod tests {
         let mut module = make_toolchain_module(name, version);
         module.slot = ModuleSlot::Line2;
         module
+    }
+
+    fn module_def(name: &str) -> ModuleDef {
+        ModuleDef {
+            name: name.to_owned(),
+            when: ModuleWhen::default(),
+            source: vec![],
+            format: "{value}".to_owned(),
+            icon: None,
+            style: StyleConfig::default(),
+            connector: None,
+            arbitration: None,
+            slot: ModuleSlot::default(),
+        }
     }
 
     fn contains_yellow_ansi(line: &str) -> bool {
@@ -739,6 +763,35 @@ mod tests {
             !lines.left2.contains("v1.82.0"),
             "line1 module should not appear on left2: {}",
             lines.left2
+        );
+    }
+
+    #[test]
+    fn test_custom_modules_keep_config_order_across_fast_and_slow() {
+        let mut fast = make_fast_outputs();
+        fast.custom_modules = vec![CustomModuleInfo {
+            name: "aws".to_owned(),
+            value: "toda".to_owned(),
+            icon: Some("\u{e33d}".to_owned()),
+            style: Style::new().fg(Color::Yellow).bold(),
+            connector: None,
+            slot: ModuleSlot::Line1,
+        }];
+        let slow = SlowOutput {
+            custom_modules: vec![make_toolchain_module("node", "v24.16.0")],
+            ..make_slow_output()
+        };
+        let mut config = default_config();
+        config.module = vec![module_def("node"), module_def("aws")];
+
+        let lines = compose_prompt(&fast, Some(&slow), 80, &config);
+
+        let node_pos = lines.left1.find("v24.16.0");
+        let aws_pos = lines.left1.find("toda");
+        assert!(
+            node_pos.is_some_and(|node| aws_pos.is_some_and(|aws| node < aws)),
+            "line1 should keep config order across fast and slow modules: {}",
+            lines.left1
         );
     }
 

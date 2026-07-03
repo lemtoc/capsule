@@ -28,6 +28,7 @@ use std::{
 use cache::BoundedCache;
 use capsule_protocol::{BuildId, ConfigGeneration, DepHash};
 use listener::ListenerMode;
+pub use local::LocalEngine;
 use session::SessionMap;
 use tokio::{
     net::UnixListener,
@@ -38,8 +39,6 @@ use crate::{
     config::{Config, ConfigLoadError},
     module::{GitProvider, ResolvedModule, resolve_modules},
 };
-
-pub use local::LocalEngine;
 
 const CACHE_MAX_SIZE: usize = 1024;
 const SESSION_TTL: Duration = Duration::from_mins(30);
