@@ -20,6 +20,29 @@ fn test_init_zsh() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn test_init_zsh_local() -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(env!("CARGO_BIN_EXE_capsule"))
+        .args(["init", "zsh", "--local"])
+        .output()?;
+
+    assert!(output.status.success(), "exit status: {}", output.status);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(env!("CARGO_BIN_EXE_capsule")),
+        "local init should use the current capsule binary path"
+    );
+    assert!(
+        stdout.contains("connect --local"),
+        "local init should use local connect"
+    );
+    assert!(
+        !stdout.contains("coproc command capsule connect --local"),
+        "local init should not depend on PATH lookup for capsule"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_init_zsh_functions() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(env!("CARGO_BIN_EXE_capsule"))
         .args(["init", "zsh"])

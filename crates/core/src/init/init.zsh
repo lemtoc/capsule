@@ -89,15 +89,16 @@ _capsule_start_coproc() {
         return 1
     fi
 
+    # Detach the real coproc from zsh's job table. `disown` expects a job
+    # spec in zsh, not a pid; immediately after `coproc`, `%+` is capsule.
+    disown %+ 2>/dev/null
+
     # Detach from zsh's coproc tracking by replacing with a trivial
     # coproc that exits immediately. Our duplicated fds remain valid
     # (kernel refcounts); capsule connect keeps running as a regular
     # (untracked) process.
     coproc : 2>/dev/null
     wait $! 2>/dev/null
-
-    # Remove from the job table entirely.
-    disown $_CAPSULE_COPROC_PID 2>/dev/null
 
     # Export pipe FD numbers so a post-exec shell can close them.
     # zsh does not set close-on-exec on {var} file descriptors, so

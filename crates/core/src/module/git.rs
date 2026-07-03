@@ -502,37 +502,18 @@ fn format_git_output(status: &GitStatus, styles: &GitStyles) -> String {
         out.push_str(&styles.state.paint_with(&state_buf, styles.color_map));
     }
 
-    // Indicator order follows Starship defaults: = $ ✘ » ! + ? ⇕/⇡⇣
-    // Max content: 7 single-char indicators + 1 diverge indicator + 2 brackets = ~40 bytes (UTF-8 multi-byte)
-    let mut indicators = String::with_capacity(40);
-    if status.conflicted > 0 {
-        indicators.push('=');
-    }
-    if status.stashed > 0 {
-        indicators.push('$');
-    }
-    if status.deleted > 0 {
-        indicators.push('✘');
-    }
-    if status.renamed > 0 {
-        indicators.push('»');
-    }
-    if status.modified > 0 {
-        indicators.push('!');
-    }
-    if status.staged > 0 {
-        indicators.push('+');
-    }
-    if status.untracked > 0 {
-        indicators.push('?');
-    }
-    if status.ahead > 0 && status.behind > 0 {
-        indicators.push('⇕');
-    } else if status.ahead > 0 {
-        indicators.push('⇡');
-    } else if status.behind > 0 {
-        indicators.push('⇣');
-    }
+    // Indicator order mostly follows Starship defaults, but hides stash count
+    // and includes counts for visible indicators:
+    // = ✘ » ! + ? ⇡ ⇣
+    let mut indicators = String::with_capacity(64);
+    write_counted_indicator(&mut indicators, "=", status.conflicted);
+    write_counted_indicator(&mut indicators, "✘", status.deleted);
+    write_counted_indicator(&mut indicators, "»", status.renamed);
+    write_counted_indicator(&mut indicators, "!", status.modified);
+    write_counted_indicator(&mut indicators, "+", status.staged);
+    write_counted_indicator(&mut indicators, "?", status.untracked);
+    write_counted_indicator(&mut indicators, "⇡", status.ahead);
+    write_counted_indicator(&mut indicators, "⇣", status.behind);
 
     if !indicators.is_empty() {
         if !out.is_empty() {
@@ -544,6 +525,18 @@ fn format_git_output(status: &GitStatus, styles: &GitStyles) -> String {
     }
 
     out
+}
+
+fn write_counted_indicator(buf: &mut String, symbol: &str, count: usize) {
+    use std::fmt::Write as _;
+
+    if count == 0 {
+        return;
+    }
+    if !buf.is_empty() {
+        buf.push(' ');
+    }
+    let _ = write!(buf, "{symbol}{count}");
 }
 
 #[cfg(test)]

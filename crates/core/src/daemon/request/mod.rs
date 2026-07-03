@@ -6,7 +6,7 @@ use capsule_protocol::{
 };
 use tokio::{
     net::UnixStream,
-    sync::{Mutex, watch},
+    sync::{Mutex, mpsc, watch},
     task::JoinSet,
 };
 
@@ -23,6 +23,10 @@ mod pipeline;
 
 use pipeline::{CollectedFacts, ConfigSnapshot, GatedPromptRequest};
 
+const MESSAGE_CHANNEL_CAPACITY: usize = 32;
+
+pub(super) type ResponseSender = mpsc::Sender<Message>;
+
 /// Per-connection context, cloned from the accept loop for each spawned handler.
 pub(super) struct ConnectionCtx<G> {
     pub(super) state: Arc<Mutex<SharedState>>,
@@ -36,7 +40,7 @@ pub(super) struct ConnectionCtx<G> {
 
 struct RequestCtx<G> {
     state: Arc<Mutex<SharedState>>,
-    writer: Arc<Mutex<MessageWriter<tokio::net::unix::OwnedWriteHalf>>>,
+    writer: ResponseSender,
     home_dir: Arc<PathBuf>,
     git_provider: G,
     config: Arc<Mutex<ReloadableConfig>>,
@@ -44,59 +48,126 @@ struct RequestCtx<G> {
     worker_tasks: Arc<Mutex<JoinSet<()>>>,
 }
 
-async fn write_message(
-    writer: &Arc<Mutex<MessageWriter<tokio::net::unix::OwnedWriteHalf>>>,
-    message: &Message,
-) -> Result<(), DaemonError> {
-    writer.lock().await.write_message(message).await?;
+async fn write_message(writer: &ResponseSender, message: Message) -> Result<(), DaemonError> {
+    writer
+        .send(message)
+        .await
+        .map_err(|_send_error| DaemonError::ResponseChannelClosed)?;
     Ok(())
 }
 
-pub(super) async fn handle_connection<G: GitProvider + Clone + Send + 'static>(
+#[derive(Clone)]
+pub(super) struct PromptEngine<G> {
+    state: Arc<Mutex<SharedState>>,
+    home_dir: Arc<PathBuf>,
+    git_provider: G,
+    config: Arc<Mutex<ReloadableConfig>>,
+    stats: Arc<DaemonStats>,
+    worker_tasks: Arc<Mutex<JoinSet<()>>>,
+}
+
+pub(super) struct PromptEngineParts<G> {
+    pub(super) state: Arc<Mutex<SharedState>>,
+    pub(super) home_dir: Arc<PathBuf>,
+    pub(super) git_provider: G,
+    pub(super) config: Arc<Mutex<ReloadableConfig>>,
+    pub(super) stats: Arc<DaemonStats>,
+    pub(super) worker_tasks: Arc<Mutex<JoinSet<()>>>,
+}
+
+impl<G: GitProvider + Clone + Send + Sync + 'static> PromptEngine<G> {
+    pub(super) fn new(parts: PromptEngineParts<G>) -> Self {
+        Self {
+            state: parts.state,
+            home_dir: parts.home_dir,
+            git_provider: parts.git_provider,
+            config: parts.config,
+            stats: parts.stats,
+            worker_tasks: parts.worker_tasks,
+        }
+    }
+
+    pub(super) async fn handle_request(
+        &self,
+        req: Request,
+        writer: ResponseSender,
+        connection_tasks: &mut JoinSet<()>,
+    ) -> Result<(), DaemonError> {
+        let req_ctx = RequestCtx {
+            state: Arc::clone(&self.state),
+            writer,
+            home_dir: Arc::clone(&self.home_dir),
+            git_provider: self.git_provider.clone(),
+            config: Arc::clone(&self.config),
+            stats: Arc::clone(&self.stats),
+            worker_tasks: Arc::clone(&self.worker_tasks),
+        };
+        handle_request(req, req_ctx, connection_tasks).await
+    }
+
+    pub(super) async fn env_var_names(&self) -> Vec<String> {
+        let modules = {
+            let mut config = self.config.lock().await;
+            let (_, modules, _) = config.snapshot(&self.stats).await;
+            drop(config);
+            modules
+        };
+        required_env_var_names(&modules)
+    }
+
+    pub(super) async fn status_response(&self) -> capsule_protocol::StatusResponse {
+        let state = self.state.lock().await;
+        let config = self.config.lock().await;
+        self.stats.snapshot(&state, &config)
+    }
+}
+
+pub(super) async fn handle_connection<G: GitProvider + Clone + Send + Sync + 'static>(
     stream: UnixStream,
     ctx: ConnectionCtx<G>,
 ) -> Result<(), DaemonError> {
     let (reader, writer) = stream.into_split();
     let mut msg_reader = MessageReader::new(reader);
-    let msg_writer = Arc::new(Mutex::new(MessageWriter::new(writer)));
+    let mut msg_writer = MessageWriter::new(writer);
+    let (response_tx, mut response_rx) = mpsc::channel::<Message>(MESSAGE_CHANNEL_CAPACITY);
     let mut connection_tasks = JoinSet::new();
+    connection_tasks.spawn(async move {
+        while let Some(message) = response_rx.recv().await {
+            if let Err(error) = msg_writer.write_message(&message).await {
+                tracing::debug!(error = %error, "failed to write response message");
+                break;
+            }
+        }
+    });
+
+    let engine = PromptEngine::new(PromptEngineParts {
+        state: Arc::clone(&ctx.state),
+        home_dir: Arc::clone(&ctx.home_dir),
+        git_provider: ctx.git_provider.clone(),
+        config: Arc::clone(&ctx.config),
+        stats: Arc::clone(&ctx.stats),
+        worker_tasks: Arc::clone(&ctx.worker_tasks),
+    });
 
     loop {
         tokio::select! {
             message = msg_reader.read_message() => {
                 match message {
                     Ok(Some(Message::Request(req))) => {
-                        let req_ctx = RequestCtx {
-                            state: Arc::clone(&ctx.state),
-                            writer: Arc::clone(&msg_writer),
-                            home_dir: Arc::clone(&ctx.home_dir),
-                            git_provider: ctx.git_provider.clone(),
-                            config: Arc::clone(&ctx.config),
-                            stats: Arc::clone(&ctx.stats),
-                            worker_tasks: Arc::clone(&ctx.worker_tasks),
-                        };
-                        handle_request(req, req_ctx, &mut connection_tasks).await?;
+                        engine
+                            .handle_request(req, response_tx.clone(), &mut connection_tasks)
+                            .await?;
                     }
                     Ok(Some(Message::StatusRequest(_))) => {
-                        let response = {
-                            let state = ctx.state.lock().await;
-                            let config = ctx.config.lock().await;
-                            ctx.stats.snapshot(&state, &config)
-                        };
-                        write_message(&msg_writer, &Message::StatusResponse(response)).await?;
+                        let response = engine.status_response().await;
+                        write_message(&response_tx, Message::StatusResponse(response)).await?;
                     }
                     Ok(Some(Message::Hello(_))) => {
-                        let modules = {
-                            let mut config = ctx.config.lock().await;
-                            let (_, modules, _) = config.snapshot(&ctx.stats).await;
-                            drop(config);
-                            modules
-                        };
                         let ack = HelloAck {
                             build_id: (*ctx.build_id).clone(),
-                            env_var_names: required_env_var_names(&modules),
+                            env_var_names: engine.env_var_names().await,
                         };
-                        write_message(&msg_writer, &Message::HelloAck(ack)).await?;
+                        write_message(&response_tx, Message::HelloAck(ack)).await?;
                     }
                     Ok(Some(_)) => {}
                     Ok(None) => break,
@@ -318,7 +389,7 @@ impl Drop for InflightCleanupGuard {
 
 struct SlowUpdateTarget {
     state: Arc<Mutex<SharedState>>,
-    writer: Arc<Mutex<MessageWriter<tokio::net::unix::OwnedWriteHalf>>>,
+    writer: ResponseSender,
     receiver: watch::Receiver<Option<Arc<prompt::SlowOutput>>>,
     session_id: capsule_protocol::SessionId,
     generation: PromptGeneration,
@@ -533,7 +604,7 @@ async fn handle_request<G: GitProvider + Send + 'static>(
     let slow_modules = Arc::clone(&config_snap.modules);
     let CollectedFacts { facts, cache_key } = collected;
     let state = Arc::clone(&ctx.state);
-    let writer = Arc::clone(&ctx.writer);
+    let writer = ctx.writer.clone();
     let (receiver, should_start_compute, cached_for_worker) = match slow_claim {
         SlowWorkClaim::Cached {
             slow,
@@ -575,11 +646,11 @@ async fn handle_request<G: GitProvider + Send + 'static>(
         cwd = %gated.cwd,
         "sending RenderResult"
     );
-    write_message(&writer, &Message::RenderResult(result)).await?;
+    write_message(&writer, Message::RenderResult(result)).await?;
 
     connection_tasks.spawn(wait_for_slow_update(SlowUpdateTarget {
         state: Arc::clone(&state),
-        writer: Arc::clone(&writer),
+        writer: writer.clone(),
         receiver,
         session_id: gated.session_id,
         generation: gated.generation,
@@ -599,7 +670,7 @@ async fn handle_request<G: GitProvider + Send + 'static>(
 )]
 async fn try_send_slow_update(
     state: &Arc<Mutex<SharedState>>,
-    writer: &Arc<Mutex<MessageWriter<tokio::net::unix::OwnedWriteHalf>>>,
+    writer: &ResponseSender,
     session_id: capsule_protocol::SessionId,
     generation: PromptGeneration,
     fast: &prompt::FastOutputs,
@@ -640,7 +711,7 @@ async fn try_send_slow_update(
         // so new_lines.char_meta is always correct here.
         meta: new_lines.char_meta,
     };
-    if let Err(error) = write_message(writer, &Message::Update(update)).await {
+    if let Err(error) = write_message(writer, Message::Update(update)).await {
         tracing::debug!(session_id = %session_id, error = %error, "failed to send update");
     }
 }

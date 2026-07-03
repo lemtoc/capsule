@@ -42,7 +42,7 @@ impl Drop for ActiveConnectionGuard {
 impl<G> AcceptCtx<G> {
     fn spawn_handler(&self, stream: UnixStream, handlers: &mut JoinSet<()>)
     where
-        G: GitProvider + Clone + Send + 'static,
+        G: GitProvider + Clone + Send + Sync + 'static,
     {
         self.stats.connections_total.fetch_add(1, Ordering::Relaxed);
         self.stats

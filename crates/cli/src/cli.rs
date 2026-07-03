@@ -15,11 +15,18 @@ pub enum Command {
         action: Option<DaemonAction>,
     },
     /// Connect to the daemon (coproc relay)
-    Connect,
+    Connect {
+        /// Run the prompt engine inside this coprocess instead of using the daemon
+        #[arg(long)]
+        local: bool,
+    },
     /// Output shell initialization script
     Init {
         /// Target shell
         shell: Shell,
+        /// Generate init script that uses `capsule connect --local`
+        #[arg(long)]
+        local: bool,
     },
     /// Output preset module definitions as TOML
     Preset,

@@ -7,6 +7,7 @@
 mod accept;
 mod cache;
 pub mod listener;
+mod local;
 mod prompt;
 mod request;
 mod session;
@@ -38,6 +39,8 @@ use crate::{
     module::{GitProvider, ResolvedModule, resolve_modules},
 };
 
+pub use local::LocalEngine;
+
 const CACHE_MAX_SIZE: usize = 1024;
 const SESSION_TTL: Duration = Duration::from_mins(30);
 
@@ -56,6 +59,10 @@ pub enum DaemonError {
     /// Wire protocol error (read, write, parse).
     #[error("protocol: {0}")]
     Protocol(#[from] capsule_protocol::ProtocolError),
+
+    /// Response channel closed before a prompt message could be delivered.
+    #[error("response channel closed")]
+    ResponseChannelClosed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

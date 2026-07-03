@@ -235,6 +235,62 @@ async fn test_e2e_connect() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// `capsule connect --local` shall serve prompt requests without a daemon.
+#[tokio::test]
+async fn test_e2e_connect_local() -> Result<(), Box<dyn std::error::Error>> {
+    let tmpdir = tempfile::tempdir()?;
+    let capsule_bin = env!("CARGO_BIN_EXE_capsule");
+    let mut child = Command::new(capsule_bin)
+        .args(["connect", "--local"])
+        .env("TMPDIR", tmpdir.path())
+        .env("HOME", tmpdir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let mut child_stdin = child.stdin.take().ok_or("no stdin")?;
+    let child_stdout = child.stdout.take().ok_or("no stdout")?;
+
+    let cwd = tmpdir.path().to_string_lossy().into_owned();
+    let tab_req = format!("1\t0\t\t{cwd}\t80\tmain\t\n");
+    child_stdin.write_all(tab_req.as_bytes())?;
+    child_stdin.flush()?;
+    drop(child_stdin);
+
+    let mut reader = std::io::BufReader::new(child_stdout);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut meta_buf = Vec::new();
+        let _ = reader.read_until(b'\n', &mut meta_buf);
+        let mut resp_buf = String::new();
+        let n = reader.read_line(&mut resp_buf);
+        let _ = tx.send((resp_buf, n));
+    });
+
+    let (resp_line, n) = rx.recv_timeout(Duration::from_secs(5))?;
+    handle.join().map_err(|_panic| "reader thread panicked")?;
+
+    let n = n?;
+    assert!(n > 0, "should receive response bytes");
+
+    let resp_line = resp_line.trim_end_matches('\n');
+    let fields: Vec<&str> = resp_line.splitn(4, '\t').collect();
+    assert!(
+        fields.len() >= 4,
+        "expected 4 tab-separated fields, got {}: {resp_line:?}",
+        fields.len()
+    );
+    assert_eq!(fields[0], "R", "expected RenderResult type");
+    assert_eq!(fields[1], "1", "expected generation 1");
+    assert!(!fields[2].is_empty(), "left1 should not be empty");
+
+    let status = child.wait()?;
+    assert!(status.success(), "local connect should exit cleanly");
+
+    Ok(())
+}
+
 /// When daemon is killed during an active relay, capsule connect shall
 /// reconnect (via `ensure_daemon`) and resume translating messages.
 #[tokio::test]

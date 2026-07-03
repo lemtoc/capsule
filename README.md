@@ -8,7 +8,7 @@ English・[日本語](README.ja.md)
   <img src="assets/vhs/readme-prompt.gif" alt="capsule prompt demo">
 </p>
 
-A persistent daemon handles rendering, caching, and slow module refreshes. `zsh` relays prompt requests through a coprocess, so the prompt renders immediately and updates asynchronously when background work completes.
+A prompt worker handles rendering, caching, and slow module refreshes. By default this is a persistent daemon. `capsule init zsh --local` instead keeps the worker inside the shell coprocess, so it exits with the shell and does not use a long-lived service. In both modes, the prompt renders immediately and updates asynchronously when background work completes.
 
 ## Prompt
 
@@ -36,6 +36,12 @@ capsule daemon install   # macOS: launchd  |  Linux: systemd --user
 
 # 3. Add to .zshrc
 eval "$(capsule init zsh)"
+```
+
+For per-shell local mode without the persistent daemon:
+
+```bash
+eval "$(capsule init zsh --local)"
 ```
 
 To bootstrap toolchain modules, run `capsule preset` and paste the output into your config file.
@@ -171,7 +177,9 @@ capsule daemon              Start the daemon
 capsule daemon install      Register service (launchd on macOS, systemd on Linux)
 capsule daemon uninstall    Remove service
 capsule connect             Coprocess relay (used by init script)
+capsule connect --local     Coprocess-hosted prompt worker (no persistent daemon)
 capsule init zsh            Print shell integration script
+capsule init zsh --local    Print shell integration script for local mode
 capsule preset              Print built-in module definitions as TOML
 ```
 

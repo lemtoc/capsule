@@ -53,15 +53,32 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         },
-        Command::Connect => connect::run(),
-        Command::Init { shell } => {
+        Command::Connect { local } => connect::run(local),
+        Command::Init { shell, local } => {
             match shell {
                 Shell::Zsh => {
-                    print!("{}", capsule_core::init::zsh::generate());
+                    if local {
+                        let current_exe = std::env::current_exe()?;
+                        let current_exe = current_exe.to_string_lossy();
+                        let connect_command = zsh_single_quote(&current_exe);
+                        print!(
+                            "{}",
+                            capsule_core::init::zsh::generate_local_with_connect_command(
+                                &connect_command
+                            )
+                        );
+                    } else {
+                        print!("{}", capsule_core::init::zsh::generate());
+                    }
                 }
             }
             Ok(())
         }
         Command::Preset => preset::run(),
     }
+}
+
+fn zsh_single_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
 }

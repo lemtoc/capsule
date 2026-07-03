@@ -9,18 +9,30 @@
 use std::{
     io::{BufRead as _, Read as _, Write as _},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Context as _;
+use capsule_core::{
+    config,
+    daemon::{ConfigSource, LocalEngine},
+    module::CommandGitProvider,
+};
 use capsule_protocol::{
     Hello, Message, MessageReader, MessageWriter, PromptGeneration, Request, SessionId,
 };
-use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _};
+use tokio::{
+    io::{AsyncBufReadExt as _, AsyncWriteExt as _},
+    sync::mpsc,
+    task::JoinSet,
+};
 
 use crate::daemon::{lock_path, socket_path};
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCAL_REQUEST_CHANNEL_CAPACITY: usize = 8;
+const LOCAL_RESPONSE_CHANNEL_CAPACITY: usize = 32;
 
 /// Run the connect relay.
 ///
@@ -35,7 +47,15 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// # Errors
 ///
 /// Returns an error if the daemon cannot be started or the relay fails.
-pub fn run() -> anyhow::Result<()> {
+pub fn run(local: bool) -> anyhow::Result<()> {
+    if local {
+        return run_local();
+    }
+
+    run_daemon_relay()
+}
+
+fn run_daemon_relay() -> anyhow::Result<()> {
     let socket_path = socket_path()?;
 
     ensure_daemon(&socket_path)?;
@@ -79,6 +99,45 @@ pub fn run() -> anyhow::Result<()> {
     rt.shutdown_timeout(Duration::from_millis(100));
 
     result
+}
+
+fn run_local() -> anyhow::Result<()> {
+    let session_id = generate_session_id()?;
+    let home_dir = crate::daemon::home_dir()?;
+    let config_path = config::resolve_config_path();
+    let cfg = Arc::new(
+        config_path
+            .as_deref()
+            .map_or_else(config::Config::default, config::load_config),
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    let result = rt.block_on(async {
+        let engine = LocalEngine::new(
+            home_dir,
+            CommandGitProvider,
+            ConfigSource::new(cfg, config_path),
+        );
+        emit_env_var_names(&engine.env_var_names().await)?;
+        let result = relay_local(&engine, session_id).await;
+        engine.shutdown().await;
+        result
+    });
+
+    rt.shutdown_timeout(Duration::from_millis(100));
+
+    result
+}
+
+fn emit_env_var_names(names: &[String]) -> anyhow::Result<()> {
+    let names = names.join(",");
+    let mut stdout = std::io::stdout().lock();
+    writeln!(stdout, "E:{names}")?;
+    stdout.flush()?;
+    Ok(())
 }
 
 /// Generate a random session ID by reading 8 bytes from `/dev/urandom`.
@@ -380,6 +439,132 @@ async fn relay(socket_path: &Path, session_id: SessionId) -> anyhow::Result<()> 
         }
         reconnect_daemon(socket_path).await;
     }
+}
+
+async fn relay_local(
+    engine: &LocalEngine<CommandGitProvider>,
+    session_id: SessionId,
+) -> anyhow::Result<()> {
+    let (request_tx, mut request_rx) = mpsc::channel::<Request>(LOCAL_REQUEST_CHANNEL_CAPACITY);
+    let (response_tx, mut response_rx) = mpsc::channel::<Message>(LOCAL_RESPONSE_CHANNEL_CAPACITY);
+    let stdin_task = tokio::spawn(read_local_stdin_requests(session_id, request_tx));
+    tokio::pin!(stdin_task);
+
+    let mut stdout = tokio::io::stdout();
+    let mut line_buf = Vec::with_capacity(256);
+    let mut update_tasks = JoinSet::new();
+    let mut stdin_done = false;
+    let mut requests_done = false;
+    let mut response_tx = Some(response_tx);
+
+    loop {
+        if stdin_done && requests_done && update_tasks.is_empty() {
+            response_tx.take();
+            if response_rx.is_empty() {
+                break;
+            }
+        }
+
+        tokio::select! {
+            request = request_rx.recv(), if !requests_done => {
+                match request {
+                    Some(request) => {
+                        if let Some(response_tx) = &response_tx {
+                            engine
+                                .handle_request(request, response_tx.clone(), &mut update_tasks)
+                                .await?;
+                        }
+                    }
+                    None => {
+                        requests_done = true;
+                    }
+                }
+            }
+            response = response_rx.recv() => {
+                match response {
+                    Some(response) => {
+                        write_shell_response(&mut stdout, &mut line_buf, response).await?;
+                    }
+                    None => break,
+                }
+            }
+            Some(joined) = update_tasks.join_next(), if !update_tasks.is_empty() => {
+                if let Err(error) = joined {
+                    tracing::debug!(error = %error, "local update task failed");
+                }
+            }
+            result = &mut stdin_task, if !stdin_done => {
+                result.context("local stdin task panicked")??;
+                stdin_done = true;
+            }
+        }
+    }
+
+    update_tasks.abort_all();
+    while update_tasks.join_next().await.is_some() {}
+
+    Ok(())
+}
+
+async fn read_local_stdin_requests(
+    session_id: SessionId,
+    request_tx: mpsc::Sender<Request>,
+) -> anyhow::Result<()> {
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin());
+    let mut buf = Vec::with_capacity(512);
+    loop {
+        buf.clear();
+        let n = stdin.read_until(b'\n', &mut buf).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        if buf.last() == Some(&b'\n') {
+            buf.pop();
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        let request = parse_shell_request(&buf, session_id)?;
+        request_tx
+            .send(request)
+            .await
+            .context("local request receiver closed")?;
+    }
+}
+
+async fn write_shell_response(
+    stdout: &mut tokio::io::Stdout,
+    line_buf: &mut Vec<u8>,
+    message: Message,
+) -> anyhow::Result<()> {
+    match message {
+        Message::RenderResult(rr) => {
+            format_tab_response(
+                line_buf,
+                ShellTabLineKind::RenderResult,
+                rr.generation.get(),
+                &rr.left1,
+                &rr.left2,
+                &rr.meta,
+            );
+            stdout.write_all(line_buf).await?;
+            stdout.flush().await?;
+        }
+        Message::Update(u) => {
+            format_tab_response(
+                line_buf,
+                ShellTabLineKind::Update,
+                u.generation.get(),
+                &u.left1,
+                &u.left2,
+                &u.meta,
+            );
+            stdout.write_all(line_buf).await?;
+            stdout.flush().await?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Read tab-separated lines from stdin, convert to netstring Request, send to daemon.

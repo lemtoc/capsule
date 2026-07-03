@@ -6,7 +6,7 @@
   <img src="assets/vhs/readme-prompt.gif" alt="capsule プロンプトデモ">
 </p>
 
-常駐デーモンがレンダリング・キャッシュ・低速モジュールの非同期更新を担います。`zsh` はコプロセス経由でプロンプトリクエストを中継するため、プロンプトは即座に表示され、バックグラウンド処理が完了すると非同期で更新されます。
+プロンプトワーカーがレンダリング・キャッシュ・低速モジュールの非同期更新を担います。デフォルトでは常駐デーモンとして動作します。`capsule init zsh --local` を使うと、ワーカーはシェルのコプロセス内で動作し、シェル終了時に一緒に終了するため、長時間常駐するサービスを使いません。どちらのモードでも、プロンプトは即座に表示され、バックグラウンド処理が完了すると非同期で更新されます。
 
 ## プロンプト
 
@@ -34,6 +34,12 @@ capsule daemon install   # macOS: launchd  |  Linux: systemd --user
 
 # 3. .zshrc へ追記
 eval "$(capsule init zsh)"
+```
+
+常駐デーモンを使わないシェルごとの local mode:
+
+```bash
+eval "$(capsule init zsh --local)"
 ```
 
 toolchainモジュールを用意するには、`capsule preset` を実行してその出力を設定ファイルに貼り付けます。
@@ -168,7 +174,9 @@ capsule daemon              デーモンの起動
 capsule daemon install      サービスの登録（macOS: launchd、Linux: systemd）
 capsule daemon uninstall    サービスの削除
 capsule connect             Coprocess リレー（init スクリプトが使用）
+capsule connect --local     コプロセス内のプロンプトワーカー（常駐デーモンなし）
 capsule init zsh            シェル統合スクリプトの出力
+capsule init zsh --local    local mode 用シェル統合スクリプトの出力
 capsule preset              組み込みモジュール定義を TOML として出力
 ```
 

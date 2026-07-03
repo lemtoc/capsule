@@ -352,12 +352,12 @@ fn test_format_git_output_bracket_indicators() {
         ..GitStatus::default()
     };
     let output = format_git_output(&status, &GitStyles::default());
-    // "main [!+?⇡]" = 4 + 1 + 6 = 11 visible chars
-    assert_eq!(display_width(&output), 11, "visible width: {output:?}");
+    // "main [!1 +2 ?3 ⇡1]" = 4 + 1 + 13 = 18 visible chars
+    assert_eq!(display_width(&output), 18, "visible width: {output:?}");
     assert!(output.contains("main"), "should contain branch");
     assert!(
-        output.contains("[!+?⇡]"),
-        "should contain bracketed indicators: {output:?}"
+        output.contains("[!1 +2 ?3 ⇡1]"),
+        "should contain counted bracketed indicators: {output:?}"
     );
     assert!(
         contains_style_sequence(&output, &[1, 31]),
@@ -399,7 +399,7 @@ fn test_format_git_output_detached_with_indicators() {
     let output = format_git_output(&status, &GitStyles::default());
     let clean = strip_ansi_and_zsh(&output);
     assert_eq!(
-        clean, "HEAD (deadbee) [!]",
+        clean, "HEAD (deadbee) [!1]",
         "short oid shorter than 7 uses full hash inside parens: {output:?}"
     );
 }
@@ -412,10 +412,10 @@ fn test_format_git_output_no_branch() {
         ..GitStatus::default()
     };
     let output = format_git_output(&status, &GitStyles::default());
-    // "[+]" = 3 visible chars
-    assert_eq!(display_width(&output), 3, "visible width: {output:?}");
+    // "[+1]" = 4 visible chars
+    assert_eq!(display_width(&output), 4, "visible width: {output:?}");
     assert!(
-        output.contains("[+]"),
+        output.contains("[+1]"),
         "should contain bracketed staged indicator: {output:?}"
     );
     assert!(
@@ -470,7 +470,7 @@ fn test_module_staged_changes() {
     assert!(output.is_some());
     let content = output.map(|o| o.content).unwrap_or_default();
     assert!(
-        content.contains("[+]"),
+        content.contains("[+2]"),
         "expected bracketed staged indicator in: {content}"
     );
 }
@@ -591,20 +591,23 @@ fn test_format_conflict_uses_equals_sign() {
     };
     let output = format_git_output(&status, &GitStyles::default());
     assert!(
-        output.contains("[=]"),
+        output.contains("[=1]"),
         "conflict should use '=' not '~': {output:?}"
     );
 }
 
 #[test]
-fn test_format_stash_indicator() {
+fn test_format_hides_stash_indicator() {
     let status = GitStatus {
         branch: Some("main".to_owned()),
         stashed: 3,
         ..GitStatus::default()
     };
     let output = format_git_output(&status, &GitStyles::default());
-    assert!(output.contains("[$]"), "stash should show '$': {output:?}");
+    assert!(
+        !output.contains("$3"),
+        "stash count should not be shown: {output:?}"
+    );
 }
 
 #[test]
@@ -616,7 +619,7 @@ fn test_format_deleted_indicator() {
     };
     let output = format_git_output(&status, &GitStyles::default());
     assert!(
-        output.contains("[✘]"),
+        output.contains("[✘1]"),
         "deleted should show '✘': {output:?}"
     );
 }
@@ -630,13 +633,13 @@ fn test_format_renamed_indicator() {
     };
     let output = format_git_output(&status, &GitStyles::default());
     assert!(
-        output.contains("[»]"),
+        output.contains("[»1]"),
         "renamed should show '»': {output:?}"
     );
 }
 
 #[test]
-fn test_format_diverged_indicator() {
+fn test_format_ahead_behind_indicators() {
     let status = GitStatus {
         branch: Some("main".to_owned()),
         ahead: 2,
@@ -644,17 +647,10 @@ fn test_format_diverged_indicator() {
         ..GitStatus::default()
     };
     let output = format_git_output(&status, &GitStyles::default());
+    assert!(output.contains("⇡2"), "ahead should show count: {output:?}");
     assert!(
-        output.contains('⇕'),
-        "diverged (ahead+behind) should show '⇕': {output:?}"
-    );
-    assert!(
-        !output.contains('⇡'),
-        "diverged should not show separate '⇡': {output:?}"
-    );
-    assert!(
-        !output.contains('⇣'),
-        "diverged should not show separate '⇣': {output:?}"
+        output.contains("⇣1"),
+        "behind should show count: {output:?}"
     );
 }
 
@@ -676,9 +672,9 @@ fn test_format_indicator_order() {
     let output = format_git_output(&status, &GitStyles::default());
     // Strip all ANSI/zsh escapes to get visible text
     let clean = strip_ansi_and_zsh(&output);
-    // Expected visible: "main [=$✘»!+?⇡]"
+    // Expected visible: "main [=1 ✘1 »1 !1 +1 ?1 ⇡1]"
     assert_eq!(
-        clean, "main [=$✘»!+?⇡]",
+        clean, "main [=1 ✘1 »1 !1 +1 ?1 ⇡1]",
         "indicators should be in Starship order: {output:?}"
     );
 }
@@ -819,7 +815,7 @@ fn test_format_git_output_state_indicators() {
     };
     let output = format_git_output(&status, &GitStyles::default());
     let clean = strip_ansi_and_zsh(&output);
-    assert_eq!(clean, "main (REBASING 2/5) [!+]");
+    assert_eq!(clean, "main (REBASING 2/5) [!1 +1]");
 }
 
 #[test]
