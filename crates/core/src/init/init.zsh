@@ -171,9 +171,6 @@ _capsule_precmd() {
     fi
     _CAPSULE_CMD_START=""
 
-    # Match Starship's default add_newline behavior.
-    print
-
     # Check coproc health
     if [[ -z "$_CAPSULE_COPROC_PID" ]] || ! command kill -0 "$_CAPSULE_COPROC_PID" 2>/dev/null; then
         _capsule_start_coproc 2>/dev/null || {

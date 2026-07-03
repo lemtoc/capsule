@@ -7,8 +7,7 @@ use crate::sealed;
 
 /// Displays the current working directory.
 ///
-/// In a git repo: repo-relative path (folder name at root).
-/// Outside git: home-abbreviated path (`~/...`).
+/// Shows a compact path while preserving the active git repository name.
 #[derive(Debug, Default)]
 #[allow(clippy::module_name_repetitions)]
 pub struct DirectoryModule;
@@ -39,21 +38,8 @@ impl Module for DirectoryModule {
 }
 
 fn format_directory(cwd: &Path, home: &Path) -> String {
-    if let Some(repo_root) = find_git_root(cwd) {
-        if cwd == repo_root {
-            // At repo root: show folder name
-            return repo_root.file_name().map_or_else(
-                || abbreviate_home(cwd, home),
-                |n| n.to_string_lossy().into_owned(),
-            );
-        }
-        // Inside repo: show repo-relative path
-        if let Ok(relative) = cwd.strip_prefix(repo_root) {
-            return relative.to_string_lossy().into_owned();
-        }
-    }
-    // Not in git repo: home-abbreviated
-    abbreviate_home(cwd, home)
+    let repo_root = find_git_root(cwd);
+    compact_components(cwd, home, repo_root)
 }
 
 fn find_git_root(start: &Path) -> Option<&Path> {
@@ -66,19 +52,63 @@ fn find_git_root(start: &Path) -> Option<&Path> {
     }
 }
 
-fn abbreviate_home(cwd: &Path, home: &Path) -> String {
+fn compact_components(cwd: &Path, home: &Path, repo_root: Option<&Path>) -> String {
     if cwd == home {
         return "~".to_owned();
     }
-    if let Ok(suffix) = cwd.strip_prefix(home) {
-        let lossy = suffix.to_string_lossy();
-        let mut result = String::with_capacity(lossy.len() + 2);
-        result.push('~');
-        result.push('/');
-        result.push_str(&lossy);
-        return result;
+
+    let (prefix, relative) = cwd.strip_prefix(home).map_or_else(
+        |_| (root_prefix(cwd), cwd),
+        |suffix| ("~".to_owned(), suffix),
+    );
+    let components = path_components(relative);
+    if components.is_empty() {
+        return if prefix.is_empty() {
+            "/".to_owned()
+        } else {
+            prefix
+        };
     }
-    cwd.to_string_lossy().into_owned()
+
+    let full_from = repo_root
+        .and_then(|root| root.strip_prefix(home).ok())
+        .map(path_components)
+        .and_then(|root_components| root_components.len().checked_sub(1))
+        .unwrap_or_else(|| components.len().saturating_sub(1));
+
+    let mut parts = Vec::with_capacity(components.len() + 1);
+    parts.push(prefix);
+    parts.extend(components.iter().enumerate().map(|(index, component)| {
+        if index < full_from {
+            shorten_component(component)
+        } else {
+            component.clone()
+        }
+    }));
+    parts.join("/")
+}
+
+fn root_prefix(path: &Path) -> String {
+    if path.is_absolute() {
+        String::new()
+    } else {
+        ".".to_owned()
+    }
+}
+
+fn path_components(path: &Path) -> Vec<String> {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn shorten_component(component: &str) -> String {
+    let chars: Vec<char> = component.chars().collect();
+    let width = if chars.len() <= 4 { 1 } else { 2 };
+    chars.into_iter().take(width).collect()
 }
 
 #[cfg(test)]
@@ -136,16 +166,15 @@ mod tests {
     fn test_module_at_git_repo_root() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir(dir.path().join(".git"))?;
-        let home = Path::new("/Users/testuser");
+        let home = dir.path().parent().ok_or("temp dir has no parent")?;
         let ctx = make_ctx(dir.path(), home);
         let output = DirectoryModule::new().render(&ctx);
         let content = output.map(|o| o.content);
-        // Should show folder name, not full path
         let folder_name = dir
             .path()
             .file_name()
             .map(|n| n.to_string_lossy().into_owned());
-        assert_eq!(content, folder_name);
+        assert_eq!(content, folder_name.map(|name| format!("~/{name}")));
         Ok(())
     }
 
@@ -155,13 +184,41 @@ mod tests {
         std::fs::create_dir(dir.path().join(".git"))?;
         let sub = dir.path().join("src").join("module");
         std::fs::create_dir_all(&sub)?;
-        let home = Path::new("/Users/testuser");
+        let home = dir.path().parent().ok_or("temp dir has no parent")?;
         let ctx = make_ctx(&sub, home);
+        let output = DirectoryModule::new().render(&ctx);
+        let repo_name = dir
+            .path()
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .ok_or("temp dir has no file name")?;
+        assert_eq!(
+            output.map(|o| o.content),
+            Some(format!("~/{repo_name}/src/module")),
+            "should preserve repo root and repo-relative suffix"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_module_inside_nested_git_repo_shortens_ancestors()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let home = dir.path();
+        let repo_root = home
+            .join("dev")
+            .join("work")
+            .join("tip-extra")
+            .join("tipextra-frontend");
+        std::fs::create_dir_all(repo_root.join(".git"))?;
+        let cwd = repo_root.join("frontend");
+        std::fs::create_dir_all(&cwd)?;
+        let ctx = make_ctx(&cwd, home);
         let output = DirectoryModule::new().render(&ctx);
         assert_eq!(
             output.map(|o| o.content),
-            Some("src/module".to_owned()),
-            "should show repo-relative path"
+            Some("~/d/w/ti/tipextra-frontend/frontend".to_owned()),
+            "should shorten ancestors before the repo root"
         );
         Ok(())
     }
@@ -175,8 +232,8 @@ mod tests {
         let output = DirectoryModule::new().render(&ctx);
         assert_eq!(
             output.map(|o| o.content),
-            Some("~/nonexistent/projects/capsule".to_owned()),
-            "should fall back to home-abbreviated when no .git"
+            Some("~/no/pr/capsule".to_owned()),
+            "should shorten ancestors and preserve the current directory when no .git"
         );
     }
 }

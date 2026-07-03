@@ -57,11 +57,11 @@ mod tests {
     }
 
     #[test]
-    fn adds_blank_line_before_prompt() {
+    fn does_not_add_blank_line_before_prompt() {
         let script = generate();
         assert!(
-            script.contains("# Match Starship's default add_newline behavior.\n    print"),
-            "script should print a blank line before each prompt"
+            !script.contains("# Match Starship's default add_newline behavior.\n    print"),
+            "script should not print a blank line before each prompt"
         );
     }
 
